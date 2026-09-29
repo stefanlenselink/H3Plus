@@ -103,13 +103,20 @@ patch and the PF1/PF2 variants are **hardware-confirmed**.
   `0x2A`/`0x2B` on press/release makes it byte-identical to the SPP commands, and only
   the `0x2A` standby handler switches the mic mux to the BT codec.
 - **`--PTT2=` / `--OD-PTT=`** repurpose the two hold-type PF "S Press" menu options
-  (radio menus 27/29). Each of the two options can be set to any of four actions —
-  `PTT2`, `PTT`, `BT-PTT`, `OD-PTT` — and the tool **rewrites the executor bodies in
-  place**, so **every pair of distinct actions works, in either order** (12 combinations,
-  all six unique unordered ones covered). Only same-action pairs are refused — one menu
-  option is one code body and can only run one action; the user picks which option to
-  sacrifice. Whatever an option is set to, its menu label follows in all nine language
-  lists (Findings §9A.50).
+  (radio menus 27/29). Each of the two options can be set to any of five actions —
+  `PTT2`, `PTT`, `BT-PTT`, `BT-PTT2`, `OD-PTT` — and the tool **rewrites the executor
+  bodies in place**, so **every pair of distinct actions works, in either order**
+  (20 combinations, all ten unique unordered ones covered). Only same-action pairs are
+  refused — one menu option is one code body and can only run one action; the user picks
+  which option to sacrifice. Whatever an option is set to, its menu label follows in all
+  nine language lists (Findings §9A.50).
+- **`BT-PTT2`** is `BT-PTT` for the **second channel**: like `BT-PTT` it pushes virtual
+  keys `0x2A`/`0x2B` (BT headset mic as the TX source), but it additionally forces the
+  transmission onto **VFO B** — the `0x2A` standby handler's VFO select
+  (`b[gp+0x46]`) is pinned to 1 by a one-shot flag (`gp+0xC7`) that the press body sets
+  and the handler consumes. Implemented with a 4-byte trampoline over the native tail of
+  that handler (`0x01E794DA`) into a 68-byte code cave at `0x01EA76DE` (verified ALLZERO
+  in v1.0.44/v1.0.50). **UNTESTED on hardware.** See Findings ch. 23.
 
 ### Usage
 
@@ -123,14 +130,15 @@ python tools/patch_h3plus_firmware_bluetooth.py <src> [dst] [options]
 | `dst` | Output file, same container type as `src`. Omit for a dry run / `--show`. |
 | `--show` | Print the current state of **every** patch site (native / already-target / unknown) and exit. Safe, read-only. |
 | `--bluetooth-mode`, `--bt`, `-b` (1–6, **default 4**) | What a connected Bluetooth headset whose name the radio does not recognise does. `1` = like `TID-PTT` (BT mic → TX, radio speaker ← RX); `2` = like `TID-MIC` (full duplex, hardware-confirmed); `3` = factory default (radio mic, = no patch); `4` = like `TID-MIC-EAR` (identical to 2 at the point of use, hardware-confirmed, **default**); `5`/`6` = link-class branch, the audio-routing-GPIO class — 6 tested (no BT mic on PTT), 5 untested. |
-| `--PTT=ACTION` | What the radio's **main PTT key** does. **Default `BT-PTT`** (hardware-confirmed). `PTT` = stock (transmit on the current VFO, no patch); `BT-PTT` = transmit the Bluetooth headset's mic while one is linked, the radio's own mic otherwise. `PTT2` / `OD-PTT` are **not possible** for the main PTT key (the PF-menu executor is not reachable from it) and are refused. |
-| `--PTT2=ACTION` | What the PF menu option **"PTT2"** does on every PF key assigned to it. **Default `PTT2`** (stock: TX forced to VFO B). Any of the four actions works as long as `--OD-PTT` differs from it. |
-| `--OD-PTT=ACTION` | What the PF menu option **"OD PTT"** does. **Default `OD-PTT`** (stock: one-key duplex). Any of the four actions works as long as `--PTT2` differs from it. |
-| `--only=NAME` | Apply only this internal patch (repeatable; expert / inspection). Names: `duplex`, `ptt` (known-bad), `pttdown`, `pttup`, `pf1down`, `pf1up`, `pf2down`, `pf2up` (legacy scanner literals), `pfbody7`, `pfbody8`, `pfrelease`, `pftable`, `pflabels`. Default set is `duplex` plus the key patches implied by the action options. When `--only` is given, the default `--PTT=BT-PTT` is **not** added unless `--PTT` is also given explicitly. |
+| `--PTT=ACTION` | What the radio's **main PTT key** does. **Default `BT-PTT`** (hardware-confirmed). `PTT` = stock (transmit on the current VFO, no patch); `BT-PTT` = transmit the Bluetooth headset's mic while one is linked, the radio's own mic otherwise. `PTT2` / `OD-PTT` / `BT-PTT2` are **not possible** for the main PTT key (the PF-menu executor is not reachable from it) and are refused. |
+| `--PTT2=ACTION` | What the PF menu option **"PTT2"** does on every PF key assigned to it. **Default `PTT2`** (stock: TX forced to VFO B). Any of the five actions (`PTT`, `PTT2`, `BT-PTT`, `BT-PTT2`, `OD-PTT`) works as long as `--OD-PTT` differs from it. |
+| `--OD-PTT=ACTION` | What the PF menu option **"OD PTT"** does. **Default `OD-PTT`** (stock: one-key duplex). Any of the five actions works as long as `--PTT2` differs from it. |
+| `--only=NAME` | Apply only this internal patch (repeatable; expert / inspection). Names: `duplex`, `ptt` (known-bad), `pttdown`, `pttup`, `pf1down`, `pf1up`, `pf2down`, `pf2up` (legacy scanner literals), `pfbody7`, `pfbody8`, `pfrelease`, `pftable`, `pfhandler`, `pfcave`, `pflabels`. Default set is `duplex` plus the key patches implied by the action options. When `--only` is given, the default `--PTT=BT-PTT` is **not** added unless `--PTT` is also given explicitly. |
 | `--sectors=PREFIX` | Also export each changed 4 KiB flash sector as `PREFIX_<addr>.bin`, and print the exact `jl-uboot-tool` `erase` / `write` / `read … verify` commands. **Raw `.bin` / full dump only** — on a `.fw` container offsets ≠ flash addresses, and the tool refuses. |
 
 Option **names** and **action values** are matched case-insensitively (`--ptt=bt-ptt`
-works); `BT-PTT` may also be written `BTPTT` / `BT_PTT`, `OD-PTT` as `ODPTT` / `OD_PTT`.
+works); `BT-PTT` may also be written `BTPTT` / `BT_PTT`, `BT-PTT2` as `BTPTT2` /
+`BT_PTT2` / `BT PTT2`, `OD-PTT` as `ODPTT` / `OD_PTT`.
 
 **Running with no options is exactly:**
 
@@ -145,21 +153,26 @@ and the two PF menu options `PTT2` / `OD PTT` keep their stock behaviour.
 ### `--PTT2` / `--OD-PTT` combinations (direct-rewrite model)
 
 Each menu option's press body and the release dispatch are rewritten in place to the
-requested action, so **all 12 ordered pairs of distinct actions build directly** — the
-six unique combinations in either option order:
+requested action, so **all 20 ordered pairs of distinct actions build directly** — the
+ten unique combinations in either option order:
 
 | combination | `--PTT2=… --OD-PTT=…` | note |
 |---|---|---|
 | PTT + PTT2 | `--PTT2=PTT --OD-PTT=PTT2` or reversed | |
 | PTT + OD-PTT | `--PTT2=PTT --OD-PTT=OD-PTT` or reversed | |
 | PTT + BT-PTT | `--PTT2=PTT --OD-PTT=BT-PTT` or reversed | |
+| PTT + BT-PTT2 | `--PTT2=PTT --OD-PTT=BT-PTT2` or reversed | BT-PTT2 **UNTESTED** |
 | PTT2 + OD-PTT | `--PTT2=PTT2 --OD-PTT=OD-PTT` | **stock** (default) |
 | PTT2 + BT-PTT | `--PTT2=PTT2 --OD-PTT=BT-PTT` or reversed | |
-| OD-PTT + BT-PTT | `--PTT2=OD-PTT --OD-PTT=BT-PTT` or reversed | tightest combo; OD release also stops TX unconditionally (self-guarded) |
+| PTT2 + BT-PTT2 | `--PTT2=PTT2 --OD-PTT=BT-PTT2` or reversed | BT-PTT2 **UNTESTED** |
+| OD-PTT + BT-PTT | `--PTT2=OD-PTT --OD-PTT=BT-PTT` or reversed | tightest stock combo; OD release also stops TX unconditionally (self-guarded) |
+| OD-PTT + BT-PTT2 | `--PTT2=OD-PTT --OD-PTT=BT-PTT2` or reversed | BT-PTT2 **UNTESTED** |
+| BT-PTT + BT-PTT2 | `--PTT2=BT-PTT --OD-PTT=BT-PTT2` or reversed | both BT mic; A-channel vs B-channel. **UNTESTED** |
 
-**Refused:** same-action pairs (`--PTT2=PTT --OD-PTT=PTT` etc. — one option, one action;
-the tool prints the full list of valid pairs) and `--PTT=PTT2` / `--PTT=OD-PTT` (the main
-PTT key cannot reach the PF-menu executor).
+**Refused:** same-action pairs (`--PTT2=PTT --OD-PTT=PTT`,
+`--PTT2=BT-PTT2 --OD-PTT=BT-PTT2` etc. — one option, one action; the tool prints the full
+list of valid pairs) and `--PTT=PTT2` / `--PTT=OD-PTT` / `--PTT=BT-PTT2` (the main PTT key
+cannot reach the PF-menu executor).
 
 The obsolete *swap model* (which exchanged the `tbb` dispatch entries instead of rewriting
 the bodies) is gone; images carrying it are detected (swapped table at `0x01E75DE2`) and
@@ -191,6 +204,13 @@ python tools/patch_h3plus_firmware_bluetooth.py Dumps/dump_internal.bin out.bin 
 # OD slot runs the BT mic (no "swap" concept exists anymore, it just builds)
 python tools/patch_h3plus_firmware_bluetooth.py Dumps/dump_internal.bin out.bin --PTT2=OD-PTT --OD-PTT=BT-PTT
 
+# BT mic on the SECOND channel: PTT2 button transmits the headset mic over VFO B
+# (UNTESTED on hardware)
+python tools/patch_h3plus_firmware_bluetooth.py Dumps/dump_internal.bin out.bin --PTT2=BT-PTT2
+
+# both BT-mic actions at once: OD slot = BT mic on VFO A, PTT2 slot = BT mic on VFO B
+python tools/patch_h3plus_firmware_bluetooth.py Dumps/dump_internal.bin out.bin --PTT2=BT-PTT2 --OD-PTT=BT-PTT
+
 # main PTT stays stock (BT duplex still on)
 python tools/patch_h3plus_firmware_bluetooth.py Dumps/dump_internal.bin out.bin --PTT=PTT
 
@@ -205,7 +225,10 @@ The default build (duplex + main PTT) changes **3 bytes in 2 sectors** (`0x05700
 `0x083000`). Each key action adds its own sectors. Per combo (on `Dumps/dump_internal.bin`,
 with the default `--PTT=BT-PTT` included): `--PTT2=PTT --OD-PTT=BT-PTT` 72 B,
 `--PTT2=PTT` alone 23 B, `--OD-PTT=BT-PTT` alone 52 B, the tightest
-`--PTT2=OD-PTT --OD-PTT=BT-PTT` 86 B. `--sectors` lists exactly the sectors that differ.
+`--PTT2=OD-PTT --OD-PTT=BT-PTT` 86 B. With BT-PTT2 (adds the trampoline + code cave):
+`--PTT2=BT-PTT2` alone 117 B, `--OD-PTT=BT-PTT2` alone 123 B,
+`--PTT2=PTT --OD-PTT=BT-PTT2` 146 B, `--PTT2=BT-PTT --OD-PTT=BT-PTT2` 156 B.
+`--sectors` lists exactly the sectors that differ.
 
 ⚠️ Always keep the original `.fw`. Flashing is at your own risk; keep `Dumps/dump_internal.bin`
 as brick-insurance.
@@ -820,14 +843,14 @@ any change to `patch_h3plus_firmware_bluetooth.py` (or its patch-site tables) be
 
 **What:** The CLI matrix — self-contained end-to-end cases driving the real
 `python tools/patch_h3plus_firmware_bluetooth.py ...` command line against `Dumps/dump_internal.bin`
-and writing `work/cli/<name>.bin`: all six unique `--PTT2`/`--OD-PTT` combinations
-in both option orders (the direct-rewrite model builds every pair of distinct actions),
-case-insensitivity (`--ptt2=ptt`), value aliases (`OD_PTT`, `BTPTT`, `BT PTT`),
-`--bluetooth-mode` aliases (`--bt`, `-b`), the main-PTT restrictions, and every rejection
-path (same-action pairs, bad action values) with expected exit codes. Also checks that
-equivalent spellings produce **byte-identical** outputs (hash comparison) and that
-`--show` on a patched image reports no `UNKNOWN`. Generated images are removed when all
-cases pass.
+and writing `work/cli/<name>.bin`: all ten unique `--PTT2`/`--OD-PTT` combinations
+in both option orders (the direct-rewrite model builds every pair of distinct actions,
+including BT-PTT2), case-insensitivity (`--ptt2=ptt`), value aliases (`OD_PTT`, `BTPTT`,
+`BT PTT`, `BTPTT2`, `BT PTT2`), `--bluetooth-mode` aliases (`--bt`, `-b`), the main-PTT
+restrictions (including `--PTT=BT-PTT2`), and every rejection path (same-action pairs,
+bad action values) with expected exit codes. Also checks that equivalent spellings produce
+**byte-identical** outputs (hash comparison) and that `--show` on a patched image reports
+no `UNKNOWN`. Generated images are removed when all cases pass.
 
 **Why:** catches CLI regressions (validation gaps, alias breakage, non-determinism) that
 the byte-level suite below can't see.
@@ -840,17 +863,20 @@ pwsh -NoProfile -File tools/verify_cli.ps1     # prints one line per case, "FAIL
 
 ### 7.2 `verify_actions.py`
 
-**What:** The byte-level suite — **self-contained**: it builds all 12 ordered
+**What:** The byte-level suite — **self-contained**: it builds all 20 ordered
 `(--PTT2, --OD-PTT)` pairs itself (into `work/verify/`, removed on success unless
 `--keep`) and checks each against the tables imported from `patch_h3plus_firmware_bluetooth.py`
 itself: the duplex site, both main-PTT scanner sites, the rewritten press bodies
 (`_pf_body7` / `_pf_body8`), the 32-byte release dispatch (`_pf_release`), the native
-`tbb` table, the string rewrites ("OD PTT"/"PTT" tails, RU "Нет"/"НЕТ", "BT PTT"
-placement), all nine PF S Press language lists rendering the expected labels, that the
-**changed-byte set equals exactly the expected patch set** (no collateral edits),
-idempotency (rebuilding a patched image writes nothing), and `--show` cleanliness.
-Plus the refusal cases: same-action pairs, `--PTT=PTT2`/`OD-PTT`, and images carrying
-the obsolete swap model (swapped `tbb` table).
+`tbb` table, the BT-PTT2 trampoline (`pfhandler` @`0x01E794DA`) and code cave (`pfcave`
+@`0x01EA76DE`, including that the cave handler reproduces the stock tail bytes and calls
+the TX-start routine), the string rewrites ("OD PTT"/"PTT" tails, RU "Нет"/"НЕТ", "BT PTT"
+/ "BT PTT2"/"BT2" placement), all nine PF S Press language lists rendering the expected
+labels, that the **changed-byte set equals exactly the expected patch set** (no collateral
+edits), idempotency (rebuilding a patched image writes nothing), and `--show` cleanliness.
+Plus the refusal cases: same-action pairs, `--PTT=PTT2`/`OD-PTT`/`BT-PTT2`, and images
+carrying the obsolete swap model (swapped `tbb` table). Currently **784 checks, 0
+failures**.
 
 **Why:** proves the patches are *functionally* correct at the instruction/label level,
 not just that the tool ran. Complements `verify_cli.ps1`: that one tests the CLI, this

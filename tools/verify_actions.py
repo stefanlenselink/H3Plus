@@ -1,7 +1,7 @@
 """Verify every (--PTT2, --OD-PTT) action pair of patch_h3plus_firmware_bluetooth.py.
 
 Self-contained regression suite for the DIRECT-REWRITE model (Findings.md
-9A.50): it builds all 12 ordered pairs of distinct actions itself, then
+9A.50): it builds all 20 ordered pairs of distinct actions itself, then
 checks the patched images byte-for-byte. Run from the repo root:
 
     python tools/verify_actions.py [--keep]
@@ -18,6 +18,9 @@ What each pair build is checked for:
   * duplex mode 4 applied (tool default)
   * the stock pair (--PTT2=PTT2 --OD-PTT=OD-PTT) leaves the whole PF
     executor region untouched
+  * BT-PTT2 (when in the pair): the key-0x2A TX-start trampoline and the
+    code cave hold the expected bytes, and the cave handler reproduces
+    the stock tail with the force-VFO-B branch
   * menu labels: all nine language lists read the right string for value
     7 and value 8; shared strings ('OD PTT', RU 'Net') stay intact
   * the changed-byte set equals exactly what build_patches() describes
@@ -62,9 +65,24 @@ START = 0x5000            # app offset inside a raw internal dump
 OUTDIR = "work/verify"
 PTT_DOWN, PTT_UP = 0x01E52400, 0x01E524BE
 
-LABEL = {"PTT": b"PTT", "PTT2": b"PTT2", "OD-PTT": b"OD PTT", "BT-PTT": b"BT PTT"}
+LABEL = {"PTT": b"PTT", "PTT2": b"PTT2", "OD-PTT": b"OD PTT", "BT-PTT": b"BT PTT",
+         "BT-PTT2": b"BT PTT2"}
 NET = "\u041d\u0415\u0422\0".encode()
 NO = "\u041d\u0435\u0442\0".encode()
+
+
+def expected_label(action, a7, a8):
+    """The menu string a list entry must read for `action` in this pair.
+
+    BT-PTT2 shows "BT PTT2" when it can overwrite "PTT2"+NET in full, but
+    the shorter "BT2" whenever "PTT2" must stay readable or the other BT
+    action already occupies the "BT PTT" placement.
+    """
+    if action != "BT-PTT2":
+        return LABEL[action]
+    if "BT-PTT" in (a7, a8) or "PTT2" in (a7, a8):
+        return b"BT2"
+    return b"BT PTT2"
 
 KEEP = "--keep" in sys.argv
 
@@ -111,7 +129,8 @@ def expected_changed_set(a7, a8, ptt_action):
 
     native = {"pfbody7": P.PF_BODY7_NATIVE,
               "pfbody8": P.PF_BODY8_NATIVE,
-              "pfrelease": P.PF_REL_NATIVE}
+              "pfrelease": P.PF_REL_NATIVE,
+              "pfhandler": P.H2A_TRAMP_NATIVE}
     for name in dict.fromkeys(names):
         pp = patches[name]
         if pp.get("kind") == "multi":
@@ -125,7 +144,7 @@ def expected_changed_set(a7, a8, ptt_action):
     return exp
 
 
-# --- the 12 ordered pairs ---------------------------------------------------
+# --- the 20 ordered pairs ---------------------------------------------------
 pairs = sorted(P.PF_COMBO_PATCHES)
 print("building %d (--PTT2, --OD-PTT) pairs from %s" % (len(pairs), SRC))
 os.makedirs(OUTDIR, exist_ok=True)
@@ -162,25 +181,60 @@ for a7, a8 in pairs:
     ck(g(a, P.STR_PTT_VA, 4) == b"PTT\0", "%s: 'PTT' tail intact" % tag)
     ck(g(a, P.STR_RU_NO_VA, 7) == NO, "%s: RU 'Net' intact" % tag)
     bt_needed = "BT-PTT" in (a7, a8)
+    bt2_needed = "BT-PTT2" in (a7, a8)
     keep_ptt2 = "PTT2" in (a7, a8)
     if bt_needed:
-        bt_at = P._BT_PTT_AT_NET if keep_ptt2 else P._BT_PTT_AT_PTT2
+        bt_at = P._BT_PTT_AT_NET if (keep_ptt2 or bt2_needed) else P._BT_PTT_AT_PTT2
         ck(g(a, bt_at, 7) == b"BT PTT\0", "%s: 'BT PTT' at 0x%08X" % (tag, bt_at))
+    if bt2_needed:
+        if bt_needed:
+            ck(g(a, P.STR_PTT2_VA, 4) == b"BT2\0", "%s: 'BT2' over PTT2" % tag)
+        elif keep_ptt2:
+            ck(g(a, P._RU_NET_AT, 4) == b"BT2\0", "%s: 'BT2' over RU NET" % tag)
+        else:
+            ck(g(a, P.STR_PTT2_VA, 8) == b"BT PTT2\0",
+               "%s: 'BT PTT2' over PTT2+NET" % tag)
+    if bt_needed or bt2_needed:
         for p in P.RU_NONE_PTRS:
             ck(ptr_at(a, p) == P.STR_RU_NO_VA, "%s: RU NET ptr -> 'Net'" % tag)
     else:
         ck(g(a, P._RU_NET_AT, 7) == NET, "%s: RU NET intact" % tag)
         for p in P.RU_NONE_PTRS:
             ck(ptr_at(a, p) == P.STR_RU_NONE_VA, "%s: RU NET ptr untouched" % tag)
-    if keep_ptt2:
+    if keep_ptt2 and not (bt2_needed and bt_needed):
         ck(g(a, P.STR_PTT2_VA, 5) == b"PTT2\0", "%s: 'PTT2' string intact" % tag)
+
+    # --- BT-PTT2 trampoline + code cave -------------------------------------
+    if bt2_needed:
+        ck(g(a, P.H2A_TRAMP_VA, P.H2A_TRAMP_LEN)
+           == P.encode_goto32(P.H2A_TRAMP_VA, P.CAVE_VA)
+           + b"\x00" * (P.H2A_TRAMP_LEN - 4),
+           "%s: key-0x2A TX-start trampoline -> cave" % tag)
+        ck(g(a, P.CAVE_VA, P.CAVE_LEN) == P._cave_images(),
+           "%s: cave holds BT-PTT2 helper code" % tag)
+        # the cave handler must reproduce the stock tail it replaces:
+        # load/shift/store of the current-VFO byte, then the TX-start call
+        h = g(a, P.CAVE_VA, 36)
+        ck(h[18:28] == bytes.fromhex("50ee7707 80a7 52ee7604".replace(" ", "")),
+           "%s: cave handler keeps the stock current-VFO tail" % tag)
+        ck(g(a, P.CAVE_VA + 28, 4) == P.encode_call(P.CAVE_VA + 28, P.TXSTART2_VA),
+           "%s: cave handler calls the TX start" % tag)
+        ck(g(a, P.CAVE_VA + 32, 4)
+           == P.encode_goto32(P.CAVE_VA + 32, P.H2A_RESUME_VA),
+           "%s: cave handler resumes after the native call" % tag)
+    else:
+        ck(g(a, P.H2A_TRAMP_VA, P.H2A_TRAMP_LEN) == P.H2A_TRAMP_NATIVE,
+           "%s: key-0x2A TX-start tail untouched" % tag)
+        ck(g(a, P.CAVE_VA, P.CAVE_LEN) == b"\x00" * P.CAVE_LEN,
+           "%s: code cave stays erased" % tag)
 
     # --- menu labels resolve ------------------------------------------------
     for p in P.PF_LIST_PTT2_PTRS:
-        for val, want in ((7, LABEL[a7]), (8, LABEL[a8])):
+        for val, act in ((7, a7), (8, a8)):
             va = ptr_at(a, p + (0 if val == 7 else 4))
             s = g(a, va, 16).split(b"\0")[0]
-            ck(s == want, "%s: list 0x%08X value %d reads %r" % (tag, p, val, s))
+            want = expected_label(act, a7, a8)
+            ck(s == want, "%s: list 0x%08X value %d reads %r" % (tag, p, val, want))
 
     # --- nothing else changed -----------------------------------------------
     exp = expected_changed_set(a7, a8, "BT-PTT")
@@ -205,7 +259,7 @@ for act in P.ACTIONS:
              "--PTT2=%s" % act, "--OD-PTT=%s" % act)
     ck(cp.returncode != 0 and "cannot run the same action" in cp.stdout + cp.stderr,
        "refuse same-action %s/%s" % (act, act))
-for act in ("PTT2", "OD-PTT"):
+for act in ("PTT2", "OD-PTT", "BT-PTT2"):
     cp = run(SRC, os.path.join(OUTDIR, "v_no.bin"), "--PTT=%s" % act)
     ck(cp.returncode != 0 and "--PTT=%s is not possible" % act in cp.stdout + cp.stderr,
        "refuse --PTT=%s" % act)

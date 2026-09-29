@@ -33,29 +33,39 @@ New-Item -ItemType Directory -Force $dir | Out-Null
 
 # name -> args, expectExit
 $cases = @(
-    # the six unique combinations, in either option order
+    # the unique combinations, in either option order
     @('c1_ptt_ptt2',      @('--PTT2=PTT',    '--OD-PTT=PTT2'), 0),
     @('c2_ptt_odptt',     @('--PTT2=PTT',    '--OD-PTT=OD-PTT'), 0),
     @('c3_ptt_btptt',     @('--PTT2=PTT',    '--OD-PTT=BT-PTT'), 0),
+    @('c3b_ptt_btptt2',   @('--PTT2=PTT',    '--OD-PTT=BT-PTT2'), 0),
     @('c4_ptt2_odptt',    @('--PTT2=PTT2',   '--OD-PTT=OD-PTT'), 0),
     @('c5_ptt2_btptt',    @('--PTT2=PTT2',   '--OD-PTT=BT-PTT'), 0),
+    @('c5b_ptt2_btptt2',  @('--PTT2=PTT2',   '--OD-PTT=BT-PTT2'), 0),
     @('c6_odptt_btptt',   @('--PTT2=OD-PTT', '--OD-PTT=BT-PTT'), 0),
     @('c6_rev',           @('--PTT2=BT-PTT', '--OD-PTT=OD-PTT'), 0),
+    @('c7_odptt_btptt2',  @('--PTT2=OD-PTT', '--OD-PTT=BT-PTT2'), 0),
+    @('c7_rev',           @('--PTT2=BT-PTT2', '--OD-PTT=OD-PTT'), 0),
+    @('c8_btptt_btptt2',  @('--PTT2=BT-PTT', '--OD-PTT=BT-PTT2'), 0),
+    @('c8_rev',           @('--PTT2=BT-PTT2', '--OD-PTT=BT-PTT'), 0),
     # the user's "rewiring" example builds directly - no swap needed
     @('example',          @('--PTT2=OD-PTT', '--OD-PTT=BT-PTT'), 0),
     # alias spellings + lowercase options
     @('alias_od',         @('--ptt2=od_ptt', '--OD-PTT=PTT2'), 0),
     @('alias_bt',         @('--PTT2=BTPTT',  '--od-ptt=PTT'), 0),
+    @('alias_bt2',        @('--PTT2=BTPTT2', '--OD-PTT=PTT'), 0),
     @('space_bt',         @('--PTT2=BT PTT', '--OD-PTT=PTT2'), 0),
+    @('space_bt2',        @('--PTT2=BT PTT2', '--OD-PTT=PTT2'), 0),
     # main PTT key: only PTT / BT-PTT exist
     @('ptt_stock',        @('--PTT=PTT'), 0),
     @('ptt_bt',           @('--PTT=BT-PTT'), 0),
     @('ref_ptt2',         @('--PTT=PTT2'), 1),
     @('ref_od',           @('--PTT=OD-PTT'), 1),
+    @('ref_bt2',          @('--PTT=BT-PTT2'), 1),
     # same-action pairs are the only refused PF pairs
     @('ref_pp',           @('--PTT2=PTT',    '--OD-PTT=PTT'), 1),
     @('ref_22',           @('--PTT2=PTT2',   '--OD-PTT=PTT2'), 1),
     @('ref_bb',           @('--PTT2=BT-PTT', '--OD-PTT=BT-PTT'), 1),
+    @('ref_b2b2',         @('--PTT2=BT-PTT2', '--OD-PTT=BT-PTT2'), 1),
     @('ref_oo',           @('--PTT2=OD-PTT', '--OD-PTT=OD-PTT'), 1),
     @('ref_badspec',      @('--PTT2=NOPE'), 1),
     # bluetooth-mode aliases
@@ -83,6 +93,14 @@ if ((Get-FileHash "$dir/alias_od.bin").Hash -ne (Get-FileHash "$dir/c1_rev.bin")
 if ((Get-FileHash "$dir/space_bt.bin").Hash -ne (Get-FileHash "$dir/btptt_ptt2.bin").Hash) {
     'space_bt DIFFERS from BT-PTT/PTT2 -> FAIL'; $fail++
 } else { 'space_bt == BT-PTT/PTT2 IDENTICAL OK' }
+# alias_bt2 / space_bt2 are BT-PTT2/PTT; compare against the canonical one
+& python $t --PTT2=BT-PTT2 --OD-PTT=PTT $src "$dir/btptt2_ptt.bin" 2>&1 | Out-Null
+if ((Get-FileHash "$dir/alias_bt2.bin").Hash -ne (Get-FileHash "$dir/btptt2_ptt.bin").Hash) {
+    'alias_bt2 DIFFERS from BT-PTT2/PTT -> FAIL'; $fail++
+} else { 'alias_bt2 == BT-PTT2/PTT IDENTICAL OK' }
+if ((Get-FileHash "$dir/space_bt2.bin").Hash -ne (Get-FileHash "$dir/btptt2_ptt.bin").Hash) {
+    'space_bt2 DIFFERS from BT-PTT2/PTT -> FAIL'; $fail++
+} else { 'space_bt2 == BT-PTT2/PTT IDENTICAL OK' }
 # example must equal c6 (same pair, same order)
 if ((Get-FileHash "$dir/example.bin").Hash -ne (Get-FileHash "$dir/c6_odptt_btptt.bin").Hash) {
     'example DIFFERS from c6 -> FAIL'; $fail++

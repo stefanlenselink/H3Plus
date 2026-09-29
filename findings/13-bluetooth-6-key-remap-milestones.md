@@ -640,6 +640,9 @@ matrix (six combinations in both orders, aliases, rejections) — **0 failures**
 The four previously-reachable non-swap pairs stay byte-identical to the §9A.48/49
 builds; the old swap pairs legitimately differ (they are now built directly).
 
+> **Update:** a fifth action, `BT-PTT2` (BT mic forced to VFO B), extends this to
+> **20 pairs / 784 checks** — trampoline + code-cave design in [Ch. 23](23-bluetooth-8-bt-ptt2.md).
+
 ---
 
 *[<< Index](Findings.md)*

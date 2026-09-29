@@ -3,7 +3,7 @@
 > Index for the RE effort on the TIDRADIO (TID Electronics) H3 Plus handheld transceiver.
 > Status: **firmware fully decrypted** — UBOOT *and* app region. Chip + chip key confirmed from hardware.
 > BT headset-mic PTT **hardware-confirmed** via 3–5 byte patches.
-> Last updated: 2026-09-26 (added [Ch. 22 — multipoint architecture](22-bluetooth-7-multipoint-architecture.md)).
+> Last updated: 2026-09-26 (added [Ch. 23 — BT-PTT2: BT mic on the second channel](23-bluetooth-8-bt-ptt2.md)).
 
 > [!IMPORTANT]
 > **No firmware is published in this repository.** The folders `BIN/`, `FW/`, `Dumps/`
@@ -44,8 +44,9 @@ The companion document for tool details is [`../tools/Tools.md`](../tools/Tools.
 | [10-bluetooth-3-disassembly.md](10-bluetooth-3-disassembly.md) | Locating the PTT handler dispatcher in the decrypted app and the discovery that `AT+MPTT` runs in the opposite direction — the radio *sends* it as an RX-squelch indicator. Also documents a major disassembler bug (wrong branch/call targets) and its fix. |
 | [11-bluetooth-4-routing-modes-decoded.md](11-bluetooth-4-routing-modes-decoded.md) | Full decode of the routing-mode classifier and the mode switch, including the routing-mode variable and register-indexed load/branch encodings. Ends with a re-confirmation of the two PTT paths and the single audio mux using mature tooling. |
 | [12-bluetooth-5-patching-tool.md](12-bluetooth-5-patching-tool.md) | The first patch tool `tools/patch_h3plus_firmware_bluetooth.py` and its hardware results: duplex works, PTT does not — overturning the earlier model. Covers the routing-mode byte's six readers, the SPP command string table, free trampoline space, and the one-virtual-key-queue model that explains everything. |
-| [13-bluetooth-6-key-remap-milestones.md](13-bluetooth-6-key-remap-milestones.md) | The endgame: manual-page-to-code mapping of PF1/PF2/PTT2/OD-PTT, the key-code patches, and the hardware-confirmed milestones — a radio key transmitting the BT headset mic, then the main PTT itself. Documents the configurable PF-menu mapping, the CLI redesign, and the direct body-rewrite model covering all 12 action pairs. |
+| [13-bluetooth-6-key-remap-milestones.md](13-bluetooth-6-key-remap-milestones.md) | The endgame: manual-page-to-code mapping of PF1/PF2/PTT2/OD-PTT, the key-code patches, and the hardware-confirmed milestones — a radio key transmitting the BT headset mic, then the main PTT itself. Documents the configurable PF-menu mapping, the CLI redesign, and the direct body-rewrite model covering all 12 action pairs (extended to 20 with `BT-PTT2`, [Ch. 23](23-bluetooth-8-bt-ptt2.md)). |
 | [22-bluetooth-7-multipoint-architecture.md](22-bluetooth-7-multipoint-architecture.md) | The dual-device question: can a headset and the TID-PTT button connect at once? Maps the connection-callback ops table at `0xBF48`, the dispatcher that reaches the classifier, the `0x1A670` device linked list, and the decisive constraint — a **single global device struct at `0x102F0`** (809 refs). Also: no free code space inside the app, but ~208 KiB of **erased flash beyond it**, keeping the trampoline route alive. |
+| [23-bluetooth-8-bt-ptt2.md](23-bluetooth-8-bt-ptt2.md) | The `BT-PTT2` action: Bluetooth-mic transmit forced onto **VFO B** (second channel), selectable as a PF-menu action. Trampoline over the key-`0x2A` standby-handler tail @`0x01E794DA` into a verified-zero code cave @`0x01EA76DE`, one-shot force-B flag at `gp+0xC7`, all 20 action pairs build. **UNTESTED on hardware.** |
 
 ### Hardware, flashing & tooling
 

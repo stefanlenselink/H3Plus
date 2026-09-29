@@ -125,9 +125,10 @@ Patch B - "physical button -> virtual +SPP=P"  (VA 0x01E60A7E, flash 0x065A7E)
 KEY ACTIONS  (--PTT / --PTT2 / --OD-PTT, Findings.md 9A.41-9A.48)
 -----------------------------------------------------------------
 
-    Every PTT-like control of the radio can be assigned one of four actions.
+    Every PTT-like control of the radio can be assigned one of five actions.
     Option names and action values are matched case-insensitively, and
-    BT-PTT / OD-PTT may also be spelled BTPTT / ODPTT / BT_PTT / OD_PTT.
+    BT-PTT / BT-PTT2 / OD-PTT may also be spelled BTPTT / BTPTT2 / ODPTT /
+    BT_PTT / BT_PTT2 / OD_PTT.
 
       PTT      normal transmit: TX on the CURRENT VFO with the radio's own
                mic (what the main PTT key always does)
@@ -135,6 +136,8 @@ KEY ACTIONS  (--PTT / --PTT2 / --OD-PTT, Findings.md 9A.41-9A.48)
       BT-PTT   transmit the BLUETOOTH headset's mic (the virtual +SPP=P /
                +SPP=R command); the radio's own mic is used when no headset
                is linked
+      BT-PTT2  like BT-PTT but TX forced to VFO B - the SECOND channel
+               (menu shows "BT PTT2").  [UNTESTED on hardware]
       OD-PTT   stock menu option: "OD PTT" one-key duplex
 
     --PTT=A      what the radio's MAIN PTT key does.
@@ -178,43 +181,57 @@ KEY ACTIONS  (--PTT / --PTT2 / --OD-PTT, Findings.md 9A.41-9A.48)
     detected and refused.
 
     WHICH COMBINATIONS ARE POSSIBLE. Every ordered pair of DISTINCT
-    actions - all 12 - works in either order. The six unordered combos:
+    actions - all 20 - works in either order. The ten unordered combos:
 
-      1. PTT     + PTT2
-      2. PTT     + OD-PTT
-      3. PTT     + BT-PTT
-      4. PTT2    + OD-PTT     stock (no-op)
-      5. PTT2    + BT-PTT
-      6. OD-PTT  + BT-PTT
+      1. PTT      + PTT2
+      2. PTT      + OD-PTT
+      3. PTT      + BT-PTT
+      4. PTT      + BT-PTT2
+      5. PTT2     + OD-PTT     stock (no-op)
+      6. PTT2     + BT-PTT
+      7. PTT2     + BT-PTT2
+      8. OD-PTT   + BT-PTT
+      9. OD-PTT   + BT-PTT2
+     10. BT-PTT   + BT-PTT2
 
     ... each in both orientations, e.g. --PTT2=OD-PTT --OD-PTT=BT-PTT is
     served directly: option 7 runs the OD setup, option 8 the BT push, and
     the release dispatch is built to match. No rewiring by the user is
     needed or possible - just choose the action each option should have.
 
-    The only refused pairs are the four where both options would run the
-    SAME action (PTT/PTT, PTT2/PTT2, BT-PTT/BT-PTT, OD-PTT/OD-PTT): one
-    code body performs one action, so choose which option to sacrifice.
+    The only refused pairs are the five where both options would run the
+    SAME action (PTT/PTT, PTT2/PTT2, BT-PTT/BT-PTT, BT-PTT2/BT-PTT2,
+    OD-PTT/OD-PTT): one code body performs one action, so choose which
+    option to sacrifice.
 
       --PTT=PTT2 / --PTT=OD-PTT   still not possible: the main PTT key
               cannot run the PF-menu executor; only its stock action or
               the BT push exist.
 
     MENU LABELS. The menu shows the action: an option set to PTT is
-    labelled "PTT", to BT-PTT "BT PTT", and stock options keep "PTT2" /
-    "OD PTT". "PTT" is the tail of the "OD PTT" string, so that string is
-    never modified and the Bluetooth menu's own "OD PTT" item keeps its
-    name. "BT PTT" (6 chars + NUL) does not fit over the 5-byte "PTT2"
-    string, so it overwrites 7 bytes starting at one of two places:
+    labelled "PTT", to BT-PTT "BT PTT", to BT-PTT2 "BT PTT2", and stock
+    options keep "PTT2" / "OD PTT". "PTT" is the tail of the "OD PTT"
+    string, so that string is never modified and the Bluetooth menu's own
+    "OD PTT" item keeps its name. "BT PTT" (6 chars + NUL) does not fit
+    over the 5-byte "PTT2" string, so it overwrites 7 bytes starting at one
+    of two places:
 
       0x01E8E30E  over "PTT2\0" + the first 2 bytes of Russian "NET"
                   (used when no option is still labelled "PTT2")
       0x01E8E313  over Russian "NET\0" exactly
                   (used when "PTT2" must stay readable)
 
-    In both cases the three pointers to Russian "NET" move to the existing
-    Russian "Net" string at 0x01E92010 (same word, different
-    capitalisation). Labels are changed in all nine language lists.
+    "BT PTT2" (7 chars + NUL) needs 8 bytes: it goes over "PTT2\0" + the
+    first 3 bytes of "NET" when no option is still labelled "PTT2", else
+    the shorter "BT2" goes over the first 4 bytes of Russian "NET". When
+    BOTH BT actions are in one pair, BT-PTT2 takes "BT2" over the first 4
+    bytes of "PTT2\0" (its NUL survives) and BT-PTT takes "BT PTT" over
+    "NET" exactly - the placements never overlap.
+
+    In every case that touches Russian "NET", the three pointers to it move
+    to the existing Russian "Net" string at 0x01E92010 (same word,
+    different capitalisation). Labels are changed in all nine language
+    lists.
     [UNTESTED]
 
     New menu entries cannot be ADDED, and other options (Weather, Alarm,
@@ -262,6 +279,9 @@ USAGE
     # menu option OD PTT becomes "BT PTT", PTT2 kept
     python tools/patch_h3plus_firmware_bluetooth.py Dumps/dump_internal.bin out.bin --OD-PTT=BT-PTT
 
+    # menu option PTT2 becomes "BT PTT2": BT headset mic, TX on VFO B (UNTESTED)
+    python tools/patch_h3plus_firmware_bluetooth.py Dumps/dump_internal.bin out.bin --PTT2=BT-PTT2
+
     # both menu options replaced (the classic combo)
     python tools/patch_h3plus_firmware_bluetooth.py Dumps/dump_internal.bin out.bin ^
         --PTT2=PTT --OD-PTT=BT-PTT
@@ -283,7 +303,7 @@ USAGE
     python tools/patch_h3plus_firmware_bluetooth.py BIN/TD-H3-PlusV1.0.50.bin --sectors=work/sect
 
 Option names and action values are case-insensitive (--ptt=bt-ptt works),
-and BT-PTT / OD-PTT may be written BTPTT / ODPTT.
+and BT-PTT / OD-PTT may be written BTPTT / ODPTT / BT_PTT / OD_PTT.
 
 
 FLASHING GRANULARITY
@@ -393,6 +413,39 @@ def encode_goto2(site_va, target_va):
     if not 0 <= d <= 0xF:
         raise ValueError("2-byte goto displacement out of range: %d" % d)
     w = 0x8004 | (d << 8)
+    return bytes([w & 0xFF, w >> 8])
+
+
+def encode_goto32(site_va, target_va):
+    """Encode the 32-bit `goto target` (`ff ea xx xx`): the call encoding
+    with bit 6 of the first byte set. Verified against stock encodings,
+    e.g. 0x01E75E34 -> 0x01E56456 is `ff ea 0f 03`."""
+    b = bytearray(encode_call(site_va, target_va))
+    b[0] |= 0x40
+    return bytes(b)
+
+
+def encode_branch2(site_va, target_va, neq=True, reg=0):
+    """Encode the 2-byte `if (r<reg> != 0) goto target` (or `== 0`).
+
+    Empirical layout (fitted against stock encodings in work/full.lst via
+    tools/pi32dis.py): w = 0x4000 | (((u >> 4) & 1) << 12) | ((u & 0xF)
+    << 8) | (cond << 7) | (((u >> 5) & 7) << 4) | reg, with cond = 1 for
+    `!=` and u = (target - site - 2) / 2 a signed 8-bit halfword count
+    (target offsets -254..+256 bytes). Verified: 0x01E75DE8 ->
+    0x01E75E74 is `a0 45` (u=69), 0x01E75E3C -> 0x01E75E74 is `80 5b`
+    (u=27), 0x01E75E4E -> 0x01E75E70 is `00 50` (==, u=16),
+    0x01E75DFC -> 0x01E75E00 is `01 41` (==, r1, u=1), 0x01E75E90 ->
+    0x01E75E96 is `00 42` (==, u=2).
+    """
+    d = target_va - site_va - 2
+    if d & 1:
+        raise ValueError("odd branch displacement")
+    u = d >> 1
+    if not -128 <= u <= 127:
+        raise ValueError("branch displacement out of range: %d" % u)
+    w = (0x4000 | (((u >> 4) & 1) << 12) | ((u & 0xF) << 8)
+         | ((1 if neq else 0) << 7) | (((u >> 5) & 7) << 4) | reg)
     return bytes([w & 0xFF, w >> 8])
 
 
@@ -553,7 +606,8 @@ PF_REL_NATIVE = bytes.fromhex(
 assert len(PF_REL_NATIVE) == PF_REL_LEN
 
 # action -> release behaviour class
-_PF_BEHAV = {"PTT": "TX", "PTT2": "TX", "OD-PTT": "OD", "BT-PTT": "BT"}
+_PF_BEHAV = {"PTT": "TX", "PTT2": "TX", "OD-PTT": "OD", "BT-PTT": "BT",
+             "BT-PTT2": "BT2"}
 
 # key-queue push (same target the +SPP=P / +SPP=R handlers use)
 PUSH_KEY_VA = 0x01E52362
@@ -572,6 +626,8 @@ def _pf_body7(action):
         return (bytes([0x48, 0x2A])
                 + encode_call(PF_BODY7_VA + 2, PUSH_KEY_VA)
                 + bytes.fromhex("5504 048a"))
+    if action == "BT-PTT2":
+        return _pf_body7_h2()
     if action == "OD-PTT":
         return (encode_call(PF_BODY7_VA, OD_SETUP_VA)
                 + encode_call(PF_BODY7_VA + 4, OD_REFRESH_VA)
@@ -587,6 +643,8 @@ def _pf_body8(action):
         return (bytes([0x48, 0x2A])
                 + encode_call(PF_BODY8_VA + 2, PUSH_KEY_VA)
                 + bytes.fromhex("5504"))
+    if action == "BT-PTT2":
+        return _pf_body8_h2()
     if action == "PTT":
         # four redundant gotos into the current-VFO tail (only the first runs)
         return b"".join(encode_goto2(PF_BODY8_VA + 2 * i, TAIL_VFO_VA)
@@ -628,15 +686,132 @@ def _pf_release(a7, a8):
         put(0x14, _pf_bt_release(REL_BT_ALT_VA))
         t7 = REL_OD_BODY_VA if b7 == "OD" else REL_BT_ALT_VA
         t8 = REL_OD_BODY_VA if b8 == "OD" else REL_BT_ALT_VA
+    elif {b7, b8} == {"OD", "BT2"}:
+        # same tight combo with the 4-byte BT-PTT2 release in the alt slot
+        put(0x0A, encode_call(REL_OD_BODY_VA, OD_TEARDOWN_VA)
+            + encode_call(REL_OD_BODY_VA + 4, TXSTOP_VA)
+            + bytes.fromhex("0004"))
+        put(0x14, _pf_bt2_release(REL_BT_ALT_VA))
+        t7 = REL_OD_BODY_VA if b7 == "OD" else REL_BT_ALT_VA
+        t8 = REL_OD_BODY_VA if b8 == "OD" else REL_BT_ALT_VA
+    elif {b7, b8} == {"BT", "BT2"}:
+        # BT release (8 B) at E82, BT-PTT2 release (4 B) at E8C
+        put(0x0A, _pf_bt_release(REL_OD_BODY_VA))
+        put(0x14, _pf_bt2_release(REL_BT_ALT_VA))
+        t7 = REL_OD_BODY_VA if b7 == "BT" else REL_BT_ALT_VA
+        t8 = REL_OD_BODY_VA if b8 == "BT" else REL_BT_ALT_VA
     else:
         if "BT" in (b7, b8):
             put(0x0A, _pf_bt_release(REL_OD_BODY_VA))
+        if "BT2" in (b7, b8):
+            put(0x0A, _pf_bt2_release(REL_OD_BODY_VA))
         tgt = {"TX": REL_TX_BODY_VA, "OD": REL_OD_BODY_VA,
-               "BT": REL_OD_BODY_VA}
+               "BT": REL_OD_BODY_VA, "BT2": REL_OD_BODY_VA}
         t7, t8 = tgt[b7], tgt[b8]
     put(0x00, encode_cmp_eq_imm(PF_REL_VA, 8, t8))
     put(0x04, encode_cmp_eq_imm(PF_REL_VA + 4, 7, t7))
     return bytes(out)
+
+
+# --- BT-PTT2: Bluetooth PTT forced to the SECOND channel (VFO B) -----------
+#
+# `BT-PTT` pushes virtual key 0x2A; its standby handler (0x01E794A2) sets
+# b[gp+0x46] = current-VFO and calls the TX start (0x01E5993C), which
+# routes 0 -> VFO A, nonzero -> VFO B. `BT-PTT2` runs the same 0x2A/0x2B
+# pipeline (BT-mic TX, hardware-confirmed for BT-PTT) but forces the TX
+# onto VFO B. The press bodies (0x01E75E38 / 0x01E75E42, 10 / 8 bytes) are
+# too small to hold the extra logic, so they jump to a code cave at
+# 0x01EA76DE (364 bytes ALLZERO in v44/v45/v50, zero pointer hits in any
+# 2-byte-aligned LE word of the app) via a trampoline at 0x01E794DA.
+#
+# The trampoline replaces the first 4 bytes of the key-0x2A standby
+# handler's TX-start tail (0x01E794DA: `r0 = b[r7+0x77]; r0 = r0 >> 7;
+# b[r7+0x46] = r0; call 0x01E5993C` - straight-line code, zero pointer
+# references); the cave handler reproduces it: with the force flag at
+# gp+0xC7 set (verified unused: zero `0xC7]` hits in the whole v50
+# disassembly) it stores 1 (VFO B) instead of the current-VFO bit, then
+# calls the TX start and returns to 0x01E794E8. The flag is set by the
+# press helper and cleared by the release helper, so a plain PTT press
+# between BT-PTT2 presses keeps working. Register contexts (disassembly-
+# verified): press bodies run with r4 = gp (0x102F0); the cave handler
+# runs in the 0x2A-handler context with r7 = gp; the release executor
+# runs with r0 = the released PF number and r4 NOT gp, so the release
+# helper loads gp itself. UNTESTED on hardware.
+CAVE_VA = 0x01EA76DE          # 364-byte ALLZERO code cave (v44/v45/v50)
+CAVE_LEN = 68                 # bytes of the cave this tool fills
+FLAG_OFF = 0xC7               # gp+0xC7: force-VFO-B flag (verified unused)
+H2A_TRAMP_VA = 0x01E794DA     # key-0x2A TX-start tail -> cave handler
+H2A_TRAMP_LEN = 14            # native span replaced (load/shift/store+call)
+H2A_RESUME_VA = 0x01E794E8    # continuation after the native TX-start call
+TXSTART2_VA = 0x01E5993C      # TX-start core (key-0x2A handler tail)
+CAVE_PRESS_VA = CAVE_VA + 36
+CAVE_REL_VA = CAVE_VA + 48
+# native trampoline bytes: r0 = b[r7+0x77]; r0 = r0 >> 7; b[r7+0x46] = r0;
+# call 0x01E5993C
+H2A_TRAMP_NATIVE = bytes.fromhex("50ee7707 80a7 52ee7604 bfea2a02".replace(" ", ""))
+
+
+def _cave_images():
+    """The cave contents: TX handler, press helper, release helper.
+
+    The handler runs in the key-0x2A standby-handler context (r7 = gp)
+    right where the stock code used to compute the current-VFO byte and
+    call the TX start. It consumes the force-VFO-B flag ONE-SHOT (clears
+    it immediately, so a later plain 0x2A press - main PTT with BT-PTT,
+    or +SPP=P - is never affected even if a release was missed), stores
+    1 (VFO B) when the flag was set or the stock current-VFO bit when it
+    was not, calls the TX start, and returns to the instruction right
+    after the native call.
+    """
+    handler = bytearray()
+    handler += bytes.fromhex("50ee770c")               # r0 = b[r7 + 0xC7]
+    handler += bytes.fromhex("4120")                   # r1 = 0
+    handler += bytes.fromhex("52ee771c")               # b[r7 + 0xC7] = r1
+    handler += encode_branch2(CAVE_VA + 10, CAVE_VA + 18, neq=False)
+    handler += bytes.fromhex("4021")                   # r0 = 1 (VFO B)
+    handler += encode_goto32(CAVE_VA + 14, CAVE_VA + 24)
+    handler += bytes.fromhex("50ee7707")               # r0 = b[r7 + 0x77]
+    handler += bytes.fromhex("80a7")                   # r0 = r0 >> 7
+    handler += bytes.fromhex("52ee7604")               # b[r7 + 0x46] = r0
+    handler += encode_call(CAVE_VA + 28, TXSTART2_VA)  # call TX-start core
+    handler += encode_goto32(CAVE_VA + 32, H2A_RESUME_VA)
+    assert len(handler) == 36
+
+    press = bytearray()
+    press += bytes.fromhex("52ee470c")                 # b[r4 + 0xC7] = r0
+    press += bytes.fromhex("482a")                     # r0 = 0x2A
+    press += encode_call(CAVE_PRESS_VA + 6, PUSH_KEY_VA)
+    press += bytes.fromhex("5504")                     # {pc, r5, r4} = [sp++]
+    assert len(press) == 12
+
+    rel = bytearray()
+    rel += bytes.fromhex("c0fff0020100")               # r0 = 0x102F0 (gp)
+    rel += bytes.fromhex("4120")                       # r1 = 0
+    rel += bytes.fromhex("52ee071c")                   # b[r0 + 0xC7] = r1
+    rel += bytes.fromhex("482b")                       # r0 = 0x2B
+    rel += encode_call(CAVE_REL_VA + 14, PUSH_KEY_VA)
+    rel += bytes.fromhex("0004")                       # pc = [sp++]
+    assert len(rel) == 20
+    return bytes(handler) + bytes(press) + bytes(rel)
+
+
+def _pf_body7_h2():
+    """PF7 press body (10 bytes) for BT-PTT2: flag + push key 0x2A."""
+    return (bytes.fromhex("4021")                       # r0 = 1
+            + encode_goto32(PF_BODY7_VA + 2, CAVE_PRESS_VA)
+            + b"\x00\x00\x00\x00")
+
+
+def _pf_body8_h2():
+    """PF8 press body (8 bytes) for BT-PTT2: flag + push key 0x2A."""
+    return (bytes.fromhex("4021")                       # r0 = 1
+            + encode_goto32(PF_BODY8_VA + 2, CAVE_PRESS_VA)
+            + b"\x00\x00")
+
+
+def _pf_bt2_release(site_va):
+    """Release body (4 bytes) for BT-PTT2: goto the cave release helper."""
+    return encode_goto32(site_va, CAVE_REL_VA)
 
 
 # Release-dispatch images produced by the OBSOLETE pre-1.0 model
@@ -670,10 +845,11 @@ ODPTT_RELEASE_VA = REL_OD_BODY_VA
 # Actions are matched case-insensitively; BT-PTT / OD-PTT also accept the
 # spellings BTPTT / ODPTT / BT_PTT / OD_PTT and "BT PTT" / "OD PTT".
 # --------------------------------------------------------------------------
-ACTIONS = ("PTT", "PTT2", "BT-PTT", "OD-PTT")
+ACTIONS = ("PTT", "PTT2", "BT-PTT", "BT-PTT2", "OD-PTT")
 _ACTION_ALIASES = {
     "PTT": "PTT", "PTT2": "PTT2",
     "BT-PTT": "BT-PTT", "BTPTT": "BT-PTT", "BT_PTT": "BT-PTT",
+    "BT-PTT2": "BT-PTT2", "BTPTT2": "BT-PTT2", "BT_PTT2": "BT-PTT2",
     "OD-PTT": "OD-PTT", "ODPTT": "OD-PTT", "OD_PTT": "OD-PTT",
 }
 
@@ -714,6 +890,8 @@ def _combo_names(a7, a8):
         names.append("pfbody8")
     if (a7, a8) != ("PTT2", "OD-PTT"):
         names.append("pfrelease")
+    if "BT-PTT2" in (a7, a8):
+        names += ["pfhandler", "pfcave"]
     return names
 
 
@@ -804,13 +982,26 @@ def _label_sites(a7, a8):
     a8 = action of stored value 8 (the stock "OD PTT" option, list entry 7).
     Each entry is repointed to the label of its action; entries that keep
     their stock action keep their stock pointer.
+
+    BT-PTT2 labels: "BT PTT2\\0" (8 B) over "PTT2"+NET[0:3] when no entry
+    still reads "PTT2"; "BT2\\0" (4 B) over Russian "NET" when one does;
+    when BOTH BT actions are in the pair, BT-PTT2 takes "BT2\\0" over the
+    first 4 bytes of "PTT2\\0" (the NUL at +4 survives) and BT-PTT takes
+    "BT PTT\\0" over "NET" exactly - the two placements never overlap.
+    Every BT-PTT2 placement destroys Russian "NET", so its three pointers
+    move to "Net" just like for BT-PTT.
     """
     label_va = {"PTT": STR_PTT_VA, "PTT2": STR_PTT2_VA, "OD-PTT": STR_OD_PTT_VA}
     bt_needed = "BT-PTT" in (a7, a8)
+    bt2_needed = "BT-PTT2" in (a7, a8)
     # "PTT2" must stay readable whenever an entry still points at it
     keep_ptt2 = "PTT2" in (a7, a8)
-    bt_at = _BT_PTT_AT_NET if (bt_needed and keep_ptt2) else _BT_PTT_AT_PTT2
+    bt_at = _BT_PTT_AT_NET if (bt_needed and (keep_ptt2 or bt2_needed)) else _BT_PTT_AT_PTT2
     label_va["BT-PTT"] = bt_at
+    if bt2_needed:
+        label_va["BT-PTT2"] = (
+            STR_PTT2_VA if bt_needed
+            else (_RU_NET_AT if keep_ptt2 else STR_PTT2_VA))
 
     sites = []
     if bt_needed:
@@ -818,13 +1009,20 @@ def _label_sites(a7, a8):
             sites.append((_BT_PTT_AT_NET, _RU_NET, b"BT PTT\0"))
         else:
             sites.append((_BT_PTT_AT_PTT2, b"PTT2\0" + _RU_NET[:2], b"BT PTT\0"))
+    if bt2_needed:
+        if bt_needed:
+            sites.append((STR_PTT2_VA, b"PTT2", b"BT2\0"))
+        elif keep_ptt2:
+            sites.append((_RU_NET_AT, _RU_NET[:4], b"BT2\0"))
+        else:
+            sites.append((STR_PTT2_VA, b"PTT2\0" + _RU_NET[:3], b"BT PTT2\0"))
     if a7 != "PTT2":
         sites += [(p, _ptr(STR_PTT2_VA), _ptr(label_va[a7]))
                   for p in PF_LIST_PTT2_PTRS]
     if a8 != "OD-PTT":
         sites += [(p + 4, _ptr(STR_OD_PTT_VA), _ptr(label_va[a8]))
                   for p in PF_LIST_PTT2_PTRS]
-    if bt_needed:
+    if bt_needed or bt2_needed:
         # the Russian "NET" bytes are gone either way; point at "Net"
         sites += [(p, _ptr(STR_RU_NONE_VA), _ptr(STR_RU_NO_VA))
                   for p in RU_NONE_PTRS]
@@ -836,7 +1034,7 @@ def _label_sites(a7, a8):
     guards = []
     if "PTT" in (a7, a8) or a7 == "OD-PTT":
         guards.append((STR_OD_PTT_VA, b"OD PTT\0"))
-    if bt_needed:
+    if bt_needed or bt2_needed:
         guards.append((STR_RU_NO_VA, "\u041d\u0435\u0442\0".encode()))
     return sites, guards
 
@@ -848,7 +1046,8 @@ def _combo_desc(a7, a8):
         _MENU_LABEL[a7], _MENU_LABEL[a8])
 
 
-_MENU_LABEL = {"PTT": "PTT", "PTT2": "PTT2", "BT-PTT": "BT PTT", "OD-PTT": "OD PTT"}
+_MENU_LABEL = {"PTT": "PTT", "PTT2": "PTT2", "BT-PTT": "BT PTT",
+               "BT-PTT2": "BT PTT2", "OD-PTT": "OD PTT"}
 
 # All reachable non-stock (--PTT2, --OD-PTT) label layouts, precomputed.
 # build_patches() installs the selected one as the "pflabels" patch and
@@ -990,6 +1189,41 @@ def build_patches(duplex_mode=4, ptt2_action="PTT2", odptt_action="OD-PTT"):
         "ctx_base": bytes.fromhex("0001 0415 4c19 2125 2e33".replace(" ", "")),
         "ctx_variant": _ctx_variant_fn(PF_TBB_78_VA, 0x01E75DDA,
                                        bytes.fromhex("0001 0415 4c19 2125 2e33".replace(" ", ""))),
+    }
+    # BT-PTT2 support code: key-0x2A TX-start trampoline + code cave.
+    # Installed for every build so --show and app-offset detection recognise
+    # them; only applied when pf_combo_patches() names them, i.e. when one of
+    # the two options runs BT-PTT2.
+    h2a_new = encode_goto32(H2A_TRAMP_VA, CAVE_VA) + b"\x00" * (H2A_TRAMP_LEN - 4)
+    patches["pfhandler"] = {
+        "desc": "key-0x2A TX-start tail -> BT-PTT2 cave handler",
+        "va": H2A_TRAMP_VA,
+        "new": h2a_new,
+        "states": {"native": H2A_TRAMP_NATIVE, "bt2": h2a_new},
+        "labels": {
+            "native": "stock current-VFO TX-start tail",
+            "bt2": "tail jumps to the cave handler (force-VFO-B aware)",
+        },
+        "target": "bt2",
+        "ctx_va": H2A_TRAMP_VA,
+        "ctx_base": H2A_TRAMP_NATIVE,
+        "ctx_variant": _ctx_variant_fn(H2A_TRAMP_VA, H2A_TRAMP_VA, H2A_TRAMP_NATIVE),
+    }
+    cave_new = _cave_images()
+    patches["pfcave"] = {
+        "desc": "code cave @0x%08X: BT-PTT2 TX handler + press/release helpers"
+                % CAVE_VA,
+        "va": CAVE_VA,
+        "new": cave_new,
+        "states": {"native": b"\x00" * CAVE_LEN, "bt2": cave_new},
+        "labels": {
+            "native": "erased (all zero)",
+            "bt2": "BT-PTT2 helper code",
+        },
+        "target": "bt2",
+        "ctx_va": CAVE_VA,
+        "ctx_base": b"\x00" * CAVE_LEN,
+        "ctx_variant": _ctx_variant_fn(CAVE_VA, CAVE_VA, b"\x00" * CAVE_LEN),
     }
     sites, guards = (PF_LABEL_VARIANTS[(ptt2_action, odptt_action)]
                      if (ptt2_action, odptt_action) != ("PTT2", "OD-PTT")
@@ -1348,7 +1582,7 @@ def main():
         "  while one is linked (the radio's own mic otherwise), and the two\n"
         "  PF menu options PTT2 / OD PTT keep their stock behaviour.\n\n"
         "Option names and action values are matched case-insensitively;\n"
-        "BT-PTT may also be written BTPTT / BT_PTT, OD-PTT as ODPTT / OD_PTT.",
+        "BT-PTT / OD-PTT may also be written BTPTT / ODPTT / BT_PTT / OD_PTT.",
         formatter_class=_Formatter,
     )
     ap.add_argument("src", help="input .fw / .bin (e.g. FW/TD-H3-PlusV1.0.50.fw)")
@@ -1395,10 +1629,12 @@ def main():
         metavar="ACTION",
         help='what the PF menu option "PTT2" does, on every PF key assigned '
         'to it. Default: PTT2 (stock).\n'
-        "  PTT2    stock: TX forced to VFO B\n"
-        "  PTT     TX on the current VFO, radio mic (menu shows \"PTT\")\n"
-        "  BT-PTT  transmit the Bluetooth headset's mic (menu shows \"BT PTT\")\n"
-        "  OD-PTT  stock one-key duplex (menu shows \"OD PTT\")\n"
+        "  PTT2     stock: TX forced to VFO B\n"
+        "  PTT      TX on the current VFO, radio mic (menu shows \"PTT\")\n"
+        "  BT-PTT   transmit the Bluetooth headset's mic (menu shows \"BT PTT\")\n"
+        "  BT-PTT2  Bluetooth headset's mic, TX forced to VFO B / the second\n"
+        "           channel (menu shows \"BT PTT2\", UNTESTED on hardware)\n"
+        "  OD-PTT   stock one-key duplex (menu shows \"OD PTT\")\n"
         "  Any action works here as long as --OD-PTT differs from it.",
     )
     ap.add_argument(
@@ -1409,10 +1645,12 @@ def main():
         metavar="ACTION",
         help='what the PF menu option "OD PTT" does, on every PF key '
         'assigned to it. Default: OD-PTT (stock).\n'
-        "  OD-PTT  stock one-key duplex\n"
-        "  BT-PTT  transmit the Bluetooth headset's mic (menu shows \"BT PTT\")\n"
-        "  PTT     TX on the current VFO, radio mic (menu shows \"PTT\")\n"
-        "  PTT2    TX forced to VFO B (menu shows \"PTT2\")\n"
+        "  OD-PTT   stock one-key duplex\n"
+        "  BT-PTT   transmit the Bluetooth headset's mic (menu shows \"BT PTT\")\n"
+        "  BT-PTT2  Bluetooth headset's mic, TX forced to VFO B / the second\n"
+        "           channel (menu shows \"BT PTT2\", UNTESTED on hardware)\n"
+        "  PTT      TX on the current VFO, radio mic (menu shows \"PTT\")\n"
+        "  PTT2     TX forced to VFO B (menu shows \"PTT2\")\n"
         "  Any action works here as long as --PTT2 differs from it.\n"
         "The two options must run DIFFERENT actions; every pair of distinct\n"
         "actions is supported, in either order:\n" + _PAIR_HELP,
@@ -1433,7 +1671,8 @@ def main():
         raise SystemExit(
             "--PTT=%s is not possible: the main PTT key has only its stock "
             "action (PTT) or the Bluetooth-mic action (BT-PTT); the PF menu "
-            "executor that runs PTT2 / OD PTT is not reachable from it."
+            "executor that runs PTT2 / BT-PTT2 / OD PTT is not reachable "
+            "from it."
             % ptt_action
         )
     validate_pf_combo(a7, a8)
