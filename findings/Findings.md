@@ -55,7 +55,7 @@ The companion document for tool details is [`../tools/Tools.md`](../tools/Tools.
 | [14-differential-analysis.md](14-differential-analysis.md) | The v1.0.44 vs v1.0.45 XOR diff: 57.7% of bytes identical with a 22 KB contiguous run. This proves the cipher is position-deterministic (no chaining/nonce), which is what makes targeted binary patching viable. |
 | [15-official-tooling.md](15-official-tooling.md) | Analysis of the vendor tools: UPX-unpacked `Update App.exe`, the `updata.exe` Kenwood serial updater with its protocol strings, and the .NET `TIDRadioCPS.exe` codeplug programmer. Notes the CPS symbols that identified the BK4819 RF chip. |
 | [16-flashing-and-hardware-dump.md](16-flashing-and-hardware-dump.md) | The three flashing/recovery paths (USB-C, Kenwood serial, web) and the hardware SPI flash dump obtained with `jl-uboot-tool`. Confirms flash == distributed `.bin`, maps the whole 1 MiB flash, finds the 32 device-specific bytes and the plaintext VM area, and shows code execution on the chip. |
-| [17-tooling-index.md](17-tooling-index.md) | Table of every script built during the effort in `tools/`, with purpose and usage lines. Includes the shared LFSR helper, the SFC/ENC decryptor (its own inverse, so it also re-encrypts), and environment/PowerShell gotchas. |
+| [17-tooling-index.md](17-tooling-index.md) | Table of every script built during the effort in `tools/`, with purpose and usage lines. Includes the shared LFSR helper, the SFC/ENC decryptor (its own inverse, so it also re-encrypts), and environment notes (platform-independent Python; historical shell gotchas). |
 
 ### Planning & reference
 

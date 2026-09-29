@@ -77,7 +77,7 @@ back what the screen said.
 From a clone of this repository (see [ARTIFACTS.md](ARTIFACTS.md) for where to put the
 firmware files):
 
-```powershell
+```bash
 # inspect what the patch would do (no output file)
 python tools/patch_h3plus_firmware_bluetooth.py BIN/TD-H3-PlusV1.0.50.bin --show
 

@@ -76,7 +76,7 @@ Full background: [findings ch. 16 — Hardware Flash Dump](findings/16-flashing-
 
 Everything in `work/` is generated, never downloaded. Typical pipeline:
 
-```powershell
+```bash
 # decrypted UBOOT (LFSR stream; phase 32591 for .bin, 31567 for .fw)
 # writes <name>.p<phase>.dec next to the input and prints an entropy report
 python tools/jl_decrypt.py BIN/TD-H3-PlusV1.0.50.bin 32591

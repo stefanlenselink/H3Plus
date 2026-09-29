@@ -200,11 +200,10 @@ Two independent bugs were found, and one *apparent* bug turned out to be a real 
 `tools/isa/pi32v2.md` line 578/579:
 
 ```
-1110101010AaaaaaBbbbbbbbbbbbbbbb    call `AaaaaaBbbbbbbbbbbbbbbb0`
-1110101011AaaaaaBbbbbbbbbbbbbbbb    goto `AaaaaaBbbbbbbbbbbbbbbb0`
-```
-
-The spec marks signed immediates with an `s` prefix (`s\`BbbAaaaa0\``). These two lines have **no** `s`, and `pi32dis.py` faithfully treated the 23-bit displacement as unsigned. But the displacement **is** signed and PC-relative. The consequence was systematic: `A = 0b111111` is simply the sign extension, and `A=0x3F` accounts for **8,607 of ~12,400** in-image calls. Every backward call therefore decoded as a bogus address near `0x0264xxxx`–`0x0265xxxx`.
+1110101010AaaaaaBbbbbbbbbbbbbbbb    call `AaaaaaBbbbbbbbbbbbbbbb0\
+  1110101011AaaaaaBbbbbbbbbbbbbbbb    goto `AaaaaaBbbbbbbbbbbbbbbb0\
+  ``\
+  The spec marks signed immediates with an `s` prefix (`s\`BbbAaaaa0\``). These two lines have **no** `s`, and `pi32dis.py` faithfully treated the 23-bit displacement as unsigned. But the displacement **is** signed and PC-relative. The consequence was systematic: `A = 0b111111` is simply the sign extension, and `A=0x3F` accounts for **8,607 of ~12,400** in-image calls. Every backward call therefore decoded as a bogus address near `0x0264xxxx`–`0x0265xxxx`.
 
 The single most consequential casualty: §9A.23's "event dispatcher" at `0x0265235E` does not exist. The real target is `0x01E52362`.
 
@@ -294,9 +293,8 @@ The unknown opcodes are not evenly spread:
 
 `0xEC`/`0xED`/`0xEE` alone are **36%** of the gap, and they cluster immediately after global-pointer loads such as `r0 = 0x102F0`. These are pi32v2's **Group 7 / parallel-execution** encodings — load/store with post-modify issued alongside an ALU op. The `0x00`/`0x01` share is largely *not* a real gap: it is linear-decode desync after inline data, which resyncs when a region is decoded from a known entry point with `--off`.
 
-#### `kagaimiq/ghidra-jieli`
-
-The obvious next step is Ghidra via [kagaimiq/ghidra-jieli](https://github.com/kagaimiq/ghidra-jieli). Its README states plainly:
+#### `kagaimiq/ghidra-jieli\
+  The obvious next step is Ghidra via [kagaimiq/ghidra-jieli](https://github.com/kagaimiq/ghidra-jieli). Its README states plainly:
 
 | Architecture | Status |
 |---|---|

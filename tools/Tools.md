@@ -27,9 +27,10 @@
 Companion document to [`../findings/Findings.md`](../findings/Findings.md) (the index; chapters live in `findings/`). Every script in `tools/`, what it does,
 why it exists, and how to use it.
 
-**Environment:** Windows / PowerShell for the firmware tools (Python 3.13, `numpy` only for
-`jl_phasemap.py`); Linux (BlueZ stack) for the Bluetooth test-rig scripts. All paths below
-are relative to the repo root (`e:\H3 Plus`).
+**Environment:** platform-independent — every tool is pure Python 3 (stdlib only,
+`numpy` only for `jl_phasemap.py`) and runs identically on Windows, Linux and macOS;
+the exception is the Bluetooth test-rig scripts, which need Linux (BlueZ stack).
+All paths below are relative to the repo root.
 
 > [!IMPORTANT]
 > The example command lines reference `BIN/`, `FW/`, `Dumps/` and `work/` — **none of
@@ -60,7 +61,7 @@ are relative to the repo root (`e:\H3 Plus`).
 6. [Bluetooth test rig (Linux)](#6-bluetooth-test-rig-linux)
    - [`bt_be_headset.sh`](#61-bt_be_headsetsh-) ⭐ · [`bt_spp_hold.py`](#62-bt_spp_holdpy-) ⭐⭐ · [`bt_spp_ptt.py`](#63-bt_spp_pttpy) · [`bt_ag_capture.py`](#64-bt_ag_capturepy) · [`bt_hf_sim.py`](#65-bt_hf_simpy) · [`bt_audio_check.sh`](#66-bt_audio_checksh) · [`bt_wait_and_pair.sh`](#67-bt_wait_and_pairsh-deprecated) · [`bt_multipoint_probe.py`](#68-bt_multipoint_probepy)
 7. [Verification & regression suites](#7-verification--regression-suites)
-   - [`verify_cli.ps1`](#71-verify_clips1) · [`verify_actions.py`](#72-verify_actionspy)
+   - [`verify_cli.py`](#71-verify_clipy) · [`verify_actions.py`](#72-verify_actionspy)
 8. [Typical workflows](#8-typical-workflows)
 
 ---
@@ -186,7 +187,7 @@ refuses the mix).
 
 ### Examples
 
-```powershell
+```bash
 # inspect the current state of every site
 python tools/patch_h3plus_firmware_bluetooth.py Dumps/dump_internal.bin --show
 
@@ -283,7 +284,7 @@ characters — prefix matching makes that sufficient).
 
 **Examples:**
 
-```powershell
+```bash
 python tools/patch_btname.py Dumps/dump_internal.bin --show
 python tools/patch_btname.py Dumps/dump_internal.bin out.bin --mic="Jabra E"
 python tools/patch_btname.py Dumps/dump_internal.bin out.bin --ptt="Jabra E"
@@ -325,7 +326,7 @@ base address by maximising the zero count.
 
 **Example — produce the plaintext app used by the disassembler:**
 
-```powershell
+```bash
 python tools/jl_sfcenc.py BIN/TD-H3-PlusV1.0.50.bin work/app_dec.bin --key=0xF181 --start=0x5000 --end=0xC8FE0
 ```
 
@@ -438,7 +439,7 @@ python tools/pi32dis.py <file> (--va ADDR | --flash ADDR | --off OFF) [options]
 
 **Examples:**
 
-```powershell
+```bash
 python tools/pi32dis.py work/app_dec.bin --flash 0x083C40 --count 26
 python tools/pi32dis.py work/app_dec.bin --va 0x01E7EC28 --func
 ```
@@ -470,7 +471,7 @@ python tools/xref.py <file> <targetVA> [--base=ADDR] [--goto] [--both]
 
 **Example:**
 
-```powershell
+```bash
 python tools/xref.py work/app_dec.bin 0x01E52362
 ```
 
@@ -524,7 +525,7 @@ finds. This is how the 9 pointer sites of `PF_LIST_PTT2_PTRS` were enumerated.
 python tools/findva.py <file> <VA> [VA...] [--half] [--raw HEXBYTES]
 ```
 
-```powershell
+```bash
 python tools/findva.py work/app_dec.bin 0x01E8E30E        # who points at "PTT2"?
 python tools/findva.py work/app_dec.bin --raw D09DD095D0A200   # RU "НЕТ" bytes
 ```
@@ -554,9 +555,9 @@ the last surviving candidate died because a draw call pointed into it.
 python tools/freespace.py <app_dec.bin> [--min 64] [--lst full.lst] [--other VER=file ...]
 ```
 
-```powershell
-python tools\freespace.py work\app_dec.bin --min 64 --lst work\full.lst `
-  --other 45=work\decrypted\v45_app_dec.bin --other 44=work\decrypted\v44_app_dec.bin
+```bash
+python tools/freespace.py work/app_dec.bin --min 64 --lst work/full.lst \
+  --other 45=work/decrypted\v45_app_dec.bin --other 44=work/decrypted\v44_app_dec.bin
 ```
 
 ---
@@ -839,7 +840,7 @@ Run on the Linux box with the radio paired (and preferably the only paired host)
 Both suites run **from the repo root** and exit non-zero on any failure. Run them after
 any change to `patch_h3plus_firmware_bluetooth.py` (or its patch-site tables) before flashing anything.
 
-### 7.1 `verify_cli.ps1`
+### 7.1 `verify_cli.py`
 
 **What:** The CLI matrix — self-contained end-to-end cases driving the real
 `python tools/patch_h3plus_firmware_bluetooth.py ...` command line against `Dumps/dump_internal.bin`
@@ -850,15 +851,16 @@ including BT-PTT2), case-insensitivity (`--ptt2=ptt`), value aliases (`OD_PTT`, 
 restrictions (including `--PTT=BT-PTT2`), and every rejection path (same-action pairs,
 bad action values) with expected exit codes. Also checks that equivalent spellings produce
 **byte-identical** outputs (hash comparison) and that `--show` on a patched image reports
-no `UNKNOWN`. Generated images are removed when all cases pass.
+no `UNKNOWN`. Generated images are removed when all cases pass. Pure stdlib — runs the
+same on Windows, Linux and macOS (port of the former `verify_cli.ps1`).
 
 **Why:** catches CLI regressions (validation gaps, alias breakage, non-determinism) that
 the byte-level suite below can't see.
 
 **Usage:**
 
-```powershell
-pwsh -NoProfile -File tools/verify_cli.ps1     # prints one line per case, "FAILURES: N" last
+```bash
+python tools/verify_cli.py     # prints one line per case, "FAILURES: N" last
 ```
 
 ### 7.2 `verify_actions.py`
@@ -879,12 +881,12 @@ carrying the obsolete swap model (swapped `tbb` table). Currently **784 checks, 
 failures**.
 
 **Why:** proves the patches are *functionally* correct at the instruction/label level,
-not just that the tool ran. Complements `verify_cli.ps1`: that one tests the CLI, this
+not just that the tool ran. Complements `verify_cli.py`: that one tests the CLI, this
 one tests the emitted bytes.
 
 **Usage:**
 
-```powershell
+```bash
 python tools/verify_actions.py          # builds + verifies, cleans up on success
 python tools/verify_actions.py --keep   # leave work/verify/ images for inspection
 ```
@@ -895,22 +897,22 @@ python tools/verify_actions.py --keep   # leave work/verify/ images for inspecti
 
 ### Patch firmware for BT-mic PTT and flash it minimally
 
-```powershell
+```bash
 python tools/patch_h3plus_firmware_bluetooth.py BIN/TD-H3-PlusV1.0.50.bin --show          # verify version
-python tools/patch_h3plus_firmware_bluetooth.py BIN/TD-H3-PlusV1.0.50.bin work\patched.bin --sectors=work\sect
+python tools/patch_h3plus_firmware_bluetooth.py BIN/TD-H3-PlusV1.0.50.bin work/patched.bin --sectors=work/sect
 # → flash only the exported sectors with jl-uboot-tool (commands are printed)
 ```
 
 ### Decrypt any archived firmware version for analysis
 
-```powershell
-python tools/jl_sfcenc.py BIN\TID-H3-PlusV1.0.45.bin work\app_1045.bin --key=0xF181 --start=0x5000 --end=0xC8FE0
-python tools\strings.py work\app_1045.bin all 8 > work\str_1045.txt
+```bash
+python tools/jl_sfcenc.py BIN/TID-H3-PlusV1.0.45.bin work/app_1045.bin --key=0xF181 --start=0x5000 --end=0xC8FE0
+python tools/strings.py work/app_1045.bin all 8 > work/str_1045.txt
 ```
 
 ### Read a function around a flash address
 
-```powershell
+```bash
 python tools/pi32dis.py work/app_dec.bin --flash 0x083C40 --count 40
 python tools/xref.py work/app_dec.bin 0x01E72C3C          # who calls the audio-path setter?
 ```

@@ -489,7 +489,7 @@ overlaps the `pf78release` site at `0x01E75E7A`.
 #### Verification
 
 A byte-level suite (`work/verify_pfmenu.py`, since replaced by
-`tools/verify_actions.py` / `tools/verify_cli.ps1`, see §9A.49) builds all four modes
+`tools/verify_actions.py` / `tools/verify_cli.py`, see §9A.49) builds all four modes
 from `Dumps/dump_internal.bin` and asserts, per mode: the duplex + main-PTT
 patches; the executor wiring (value-8 press/release push `0x2A`/`0x2B`, case-7
 body → current-VFO tail, stock where the mode keeps it); the `tbb` table and
@@ -569,7 +569,7 @@ native — those no-op pointer sites are now dropped from the `pflabels` site
 list (they previously read "already applied" and made `--show` report a partly
 modified image). `work/verify_pfmenu.py` was replaced by `tools/verify_actions.py`
 (8 pairs × wiring/dispatch/labels/changed-byte-set, **0 failures**), with the CLI
-matrix in `tools/verify_cli.ps1`, and the
+matrix in `tools/verify_cli.py`, and the
 §9A.48 artifacts `t_both`/`t_ptt`/`t_btptt`/`t_swap` reproduce byte-identically
 through the new CLI.
 
@@ -635,7 +635,7 @@ already-flashed firmware is still recognised by `--show`.
 **Regression.** `tools/verify_actions.py` (self-contained) builds all 12 pairs and
 checks bodies / release / native table / scanner sites / nine label lists /
 changed-byte-set / idempotency / `--show`, plus the same-action, `--PTT=PTT2`/`OD-PTT`,
-and swapped-table refusals — **0 failures**. `tools/verify_cli.ps1` covers the CLI
+and swapped-table refusals — **0 failures**. `tools/verify_cli.py` covers the CLI
 matrix (six combinations in both orders, aliases, rejections) — **0 failures**.
 The four previously-reachable non-swap pairs stay byte-identical to the §9A.48/49
 builds; the old swap pairs legitimately differ (they are now built directly).

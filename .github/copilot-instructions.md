@@ -85,7 +85,7 @@ python tools/patch_h3plus_firmware_bluetooth.py <src> [<dst>] [--show]
   `0x01E75E38`/`0x01E75E42` and the release window at `0x01E75E78` are rewritten.
 - Legacy swap images (tbb bytes `332e`) are detected and refused — do not "fix" this.
 - **After ANY change to this tool, run both suites and require 0 failures:**
-  `python tools/verify_actions.py` and `powershell tools/verify_cli.ps1`.
+  `python tools/verify_actions.py` and `python tools/verify_cli.py`.
   SystemExit messages go to stderr — check both streams.
 
 ## Static-analysis workflow (decrypted app)
@@ -105,13 +105,41 @@ python tools/patch_h3plus_firmware_bluetooth.py <src> [<dst>] [--show]
   pointer-scan clean) carries the BT-PTT2 code (ch. 23). Larger space: the erased flash
   beyond `0xC8FE0` via trampolines, or an SDK rebuild.
 
-## Environment & shell gotchas
+## Platform independence (mandatory)
 
-- Windows host; terminal is **pwsh**. PowerShell gotchas that bit this project:
-  `-notmatch`/`-match` on a scalar `$null` returns boolean `True`/`False` (not an
-  empty array) — prefer `Where-Object`; and `ForEach-Object { $_.Line.Trim() }`
-  crashes on empty pipeline lines — filter with `Where-Object` first.
-- Python 3.13 on Windows; tools are stdlib-only except `jl_phasemap.py` (numpy).
+**This project is platform-independent by design — do not tie new code, scripts, or
+docs to any single OS.** There are no PowerShell (`.ps1`) or batch (`.bat`/`.cmd`)
+scripts here, and none should be added.
+
+- **Every tool is pure Python 3, stdlib-first** (`numpy` only for `jl_phasemap.py`),
+  and must run unchanged on Windows, Linux and macOS. Invoke with `python`
+  (`python3` in the Linux BT rig); inside Python, spawn sub-processes with
+  `sys.executable`, never a hard-coded interpreter name.
+- **Always use forward slashes in paths** — Python accepts them on Windows too. Never
+  build paths by concatenating `\\`; use `os.path.join()` / `pathlib` in code, and
+  `../tools/...` style relative paths in docs.
+- **No OS-specific system calls, drive letters, `%VAR%`/`$env:` expansions, or
+  shell-only utilities** in the tools. Read/write files as UTF-8 explicitly
+  (`open(..., encoding="utf-8")`) so behaviour doesn't drift with the platform's
+  locale or default newline translation.
+- **The one deliberate exception:** the Bluetooth test rig (`tools/bt_*.sh`, and the
+  root-requiring `tools/bt_*.py`) needs **Linux/BlueZ** (WSL works if the BT adapter is
+  passed through) — the radio must usually initiate the connection. Keep that
+  limitation where it is; do not spread OS coupling into the firmware/crypto/analysis
+  tools.
+- **Documentation examples are shell-neutral:** mark command blocks
+  <code>```bash</code> (never <code>```powershell</code>) and write them so they work
+  in bash, pwsh and zsh alike. The historical Windows/PowerShell gotchas are preserved
+  as a record in `findings/17-tooling-index.md` only — the tooling no longer depends
+  on them.
+- The two `work/` helper scripts (`add_license_headers.py`, `split_findings.py`) are
+  the Python ports of the former `.ps1` one-offs; `tools/verify_cli.py` is the Python
+  port of `verify_cli.ps1`. Prefer extending these over reintroducing shell scripts.
+
+## Environment notes
+
+- Developed on both Windows and Linux; the tooling is verified to run on either.
+  Python 3.13+ recommended; tools are stdlib-only except `jl_phasemap.py` (numpy).
 - Bluetooth test rig (`tools/bt_*.py|sh`) runs on **Linux/BlueZ only** (WSL works if
   the BT adapter is passed through). The radio must usually initiate the connection.
 - `work/` is scratch — regenerate, don't curate. Key files: `work/app_dec.bin`

@@ -100,14 +100,14 @@ A numpy histogram-vote solver. For each byte value `v` at file index `i`, every 
 
 ### 7.6 Results
 
-`python tools\jl_phasemap.py "BIN\TID-H3-PlusV1.0.45.bin" 0x1000`
+`python tools/jl_phasemap.py BIN/TID-H3-PlusV1.0.45.bin 0x1000`
 
 | Offset range | Delta (phase) | Zeros in decrypted block |
 |---|---|---|
 | `0x0000`–`0x4000` | **32591** (consistent) | 180–430 ✅ |
 | `0x5000`+ | varies randomly | 33–47 ❌ (noise — expect ~16 for random) |
 
-`python tools\jl_phasemap.py "FW\TID-H3-PlusV1.0.45.fw" 0x1000`
+`python tools/jl_phasemap.py FW/TID-H3-PlusV1.0.45.fw 0x1000`
 
 | Offset range | Delta (phase) | Zeros |
 |---|---|---|
