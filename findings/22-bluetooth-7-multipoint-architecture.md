@@ -128,7 +128,23 @@ order, and prints one of:
 
 Until this runs on hardware, 9B.4 bounds the *app* layer but not the stack layer.
 
+> [!NOTE]
+> **UPDATE 2026-09-30 — stack layer answered (statically).** The public SDK's `btstack.a`
+> API is explicitly multi-device: `__set_user_ctrl_conn_num()`, `is_1t2_connection()`,
+> `get_total_connect_dev()`, per-address HFP/eSCO queries, and 1拖2 call
+> pre-empt/restore (`__set_hfp_switch`/`__set_hfp_restore`). Two concurrent BR/EDR links
+> are a supported stack feature; the single-device model is purely the H3 *app* layer.
+> The probe still decides what TIDRADIO's build enables — see
+> [Ch. 24 §24.4](24-jieli-ecosystem-sdk-toolchain.md#244-bt-stack--the-multipoint-answer-ch-22-open-question-b).
+
 ### 9B.7 Code space: none inside the app — but ~208 KiB of erased flash beyond it
+
+> [!WARNING]
+> **UPDATE 2026-09-30 — Route B caution.** The JLFS entry list extracted from our own
+> firmware shows the erased span `0xCA000–0xFC000` lies **inside the `VM` entry**
+> (`0xC9000`, size `0x34000`) — reserved for the append-only VM wear-leveling area.
+> Route B (trampolines there) should be reconsidered before any hardware experiment.
+> See [Ch. 24 §24.6](24-jieli-ecosystem-sdk-toolchain.md#%E2%9A%A0%EF%B8%8F-flash-map-caution-for-ch-23--route-b).
 
 Two space results matter for any trampoline plan:
 

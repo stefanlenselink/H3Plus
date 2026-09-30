@@ -78,6 +78,15 @@ def sfc_enc_decrypt(data, base=0, chipkey=0xF181):
 
 The function is its own inverse, so the same call re-encrypts a patched image.
 
+### External ground-truth tools (2026-09-30)
+
+- **Official pi32v2 objdump** (JieLi Linux toolchain, LLVM 4.0.1): cross-validates
+  `pi32dis.py` — 12,786 common branch targets, 0 mismatches. The `.incbin` → `clang -c` →
+  `ld --section-start` → `objdump -d` recipe for raw images is documented in
+  [Ch. 24 §24.5](24-jieli-ecosystem-sdk-toolchain.md#245-official-toolchain--our-disassembler-validated-byte-exactly).
+- **Community `jl-misctools`** (`fwunpack_newfw.py`, `keyfgen.py`, `recrypt.py`): independent
+  confirmation of both ciphers and the container layout ([Ch. 24 §24.6](24-jieli-ecosystem-sdk-toolchain.md#246-containers-keys-flash-map--what-the-packagers-and-community-tools-proved)).
+
 ### Environment notes
 
 - **Platform-independent:** every script in `tools/` is pure Python 3 (stdlib only,

@@ -121,6 +121,13 @@ A numpy histogram-vote solver. For each byte value `v` at file index `i`, every 
 | `BIN/TID-H3-PlusV1.0.45.bin` | **32591** | `0x0AB8` | `0x0000–0x4FFF` |
 | `FW/TID-H3-PlusV1.0.45.fw` | **31567** | `0x2F2A` | `0x0000–0x4FFF` |
 
+> [!NOTE]
+> **UPDATE 2026-09-30 — phases explained.** These phases are not vendor constants. The
+> keystream restarts at key `0xFFFF` at `payload_base + 0xB0` and runs continuously;
+> `32591 = 32767 − 0xB0` and `31567 = 32767 − 0x4B0` are pure alignment artifacts of that
+> stream (no official tool mentions them). See
+> [Ch. 24 §24.6](24-jieli-ecosystem-sdk-toolchain.md#246-containers-keys-flash-map--what-the-packagers-and-community-tools-proved).
+
 ---
 
 *[<< Index](Findings.md)*

@@ -27,6 +27,7 @@ patch makes any BT headset's mic the PTT transmit source, hardware-confirmed.
 | `findings/08–13-*.md` | The Bluetooth effort (§9A.1–9A.50) |
 | `findings/22-bluetooth-7-multipoint-architecture.md` | §9B: dual-device/multipoint analysis |
 | `findings/23-bluetooth-8-bt-ptt2.md` | §9C: BT-PTT2 (BT mic on VFO B) — trampoline + code cave design, **UNTESTED on hardware** |
+| `findings/24-jieli-ecosystem-sdk-toolchain.md` | §24: SDK/toolchain/packager ecosystem — ufw table, SFCENC registers, stack 1拖2 multipoint, official-objdump validation, flash map |
 | `tools/Tools.md` | Reference for every script in `tools/` (§1 patcher, §3 crypto, §4 static analysis, §6 BT rig, §7 test suites) |
 | `tools/isa/pi32v2.md` | The pi32v2 instruction-set notes; `pi32dis.py` parses it at runtime |
 | `BIN/ FW/ Dumps/ work/` | User artifacts (firmware, dumps, scratch) — see `ARTIFACTS.md` |
@@ -65,7 +66,16 @@ when relevant. GitHub anchor slugs: lowercase, punctuation dropped, spaces → d
 - **pi32v2 encodings:** 32-bit call/goto `target = addr + 4 + sign_extend_23(A:B<<1)`;
   `if (r0==N) goto`: word0=`00 f8`, word1=`(N<<9)|disp9`; PF tbb table entries at
   `0x01E75DDC` encode `(target − 0x01E75DDC)/2`. Full notes: `tools/isa/pi32v2.md`,
-  findings §9A.26/§9A.50.
+  findings §9A.26/§9A.50. **Validated against the official LLVM objdump (`-mcpu=r3`):
+  12,786 common branch targets, 0 mismatches** (ch. 24 §24.5). ELF machine 0xF1.
+- **Ecosystem (ch. 24):** correct SDK is `fw-AC63_BT_SDK` `cpu/br23` (= AC635N; the
+  AC630N SDK is q32s/bd29 — wrong core). SFCENC regs @`0x1F0C00` (`KEY` u16 +
+  `UNENC/LENC_ADRH/L`). Full flash map: `app.bin` @`0x5100`, VM @`0xC9000` size
+  `0x34000` (**the "erased" 0xCA000–0xFC000 span is VM-reserved**), BTIF @`0xFD000`,
+  EXIF @`0xFE000`, key_mac @`0xFF000`. The btstack API supports 1拖2 multipoint
+  (`__set_user_ctrl_conn_num`, `__set_hfp_switch/restore`) — single-device is app-layer.
+  `.ufw` table = 0x40 hdr + N×0x50 entries (LFSR key 0xFFFF, CRC16-verified); the
+  `JL_FW` trailer is its `tail.bin` entry.
 
 ## The main tool
 
@@ -159,24 +169,31 @@ scripts here, and none should be added.
   Flashing is the user's action; print the exact `jl-uboot-tool` commands instead
   (`--sectors` route preferred; always `read` back and compare after `write`).
 
-## Current state & open frontiers (as of 2026-09-26)
+## Current state & open frontiers (as of 2026-09-30)
 
 Done: both ciphers broken · classifier decoded · routing modes 1–6 mapped · key-remap
 patches HW-confirmed (BT-mic PTT, duplex) · patch tool + 2 test suites green ·
-multipoint architecture mapped (ch. 22) · **BT-PTT2 (BT mic on VFO B) implemented, all
-20 action pairs build, 784 checks green — UNTESTED on hardware** (ch. 23).
+multipoint architecture mapped (ch. 22) · BT-PTT2 implemented, 784 checks green —
+UNTESTED on hardware (ch. 23) · **ecosystem sweep: right SDK found (`fw-AC63_BT_SDK`
+`cpu/br23` = AC635N), `.ufw` table located, official objdump validated our disassembler
+(12,786 targets, 0 mismatches), stack API proves 1-to-2 multipoint** (ch. 24).
 
 Open (in priority order):
 1. **Hardware-validate BT-PTT2** (ch. 23 §9C.8): flash `--PTT2=BT-PTT2`, confirm TX on
    VFO B with the headset mic and that the one-shot flag (`gp+0xC7`) never leaks into a
    plain main-PTT/`+SPP=P` transmit.
 2. **Run `tools/bt_multipoint_probe.py <mac>` on Linux/hardware** — decides whether the
-   BT stack accepts two concurrent ACL links (headset + TID-PTT button). Gates Route A/B/C.
-3. Ghidra + quarkslab/ghidra-jieli (pi32v2) on Linux; import `work/app_dec.bin` at
-   `0x01E00000`; hunt stack-layer link policy (`btstack`/`btctrler`/`link_layer`
-   component strings @`0x933xx` are log names only — no max-link config is statically visible).
-4. AC635N/BR23 JieLi SDK acquisition (public `fw-AC630N_BT_SDK` targets the wrong chip).
-5. SFC-mapping test for erased flash beyond `0xC8FE0` (Route B trampolines).
+   H3's stack build accepts two concurrent ACL links. The SDK stack API supports 1拖2
+   with call pre-empt/restore (ch. 24 §24.4); the probe settles the H3 build.
+3. Ghidra + quarkslab/ghidra-jieli (pi32v2, ELF machine 0xF1) on Linux; import
+   `work/app_dec.bin` at `0x01E00000`. The official toolchain objdump (ch. 24 §24.5) is
+   now the ground truth for decoding; Ghidra adds decompilation.
+4. ~~AC635N/BR23 JieLi SDK acquisition~~ ✅ `fw-AC63_BT_SDK` `cpu/br23` (ch. 24 §24.1);
+   next: feasibility build of `apps/spp_and_le` for br23 with the Linux toolchain
+   (`-mcpu=r3`, `ulimit -n 8192`).
+5. ~~Route B (erased flash beyond `0xC8FE0`)~~ **deprioritized**: the JLFS entry list shows
+   `0xC9000–0xFD000` is the VM region — writing there risks VM collisions (ch. 24 §24.6).
+   SFCENC `UNENC_ADRH/L` unencrypted windows are the better hardware experiment.
 6. "BT Int Mic" menu item exists in firmware but is untested on hardware.
 
 When continuing this work, update `findings/18-open-questions-next-steps.md`, the

@@ -58,6 +58,13 @@ Plus flags/tokens: `UBOOT_HEAD_ALIGN`, `TRIPLE_UBOOT`, `uboot1.00`, `uboot2.00`,
 
 **Conclusion:** the package header at `0x000–0x3FF` is *not* covered by the same continuous keystream as the payload. It is either plaintext, separately encrypted, or the table lives elsewhere. The symbol **`jl_fw::hasTailInfo`** hints that metadata may be stored in the **trailer**, not the header — this is the most promising next lead.
 
+> [!NOTE]
+> **UPDATE 2026-09-30 — RESOLVED.** The `ufw` table was located: 0x40 header + N×0x50
+> entries, each LFSR-descrambled with key `0xFFFF` and CRC16-verified, and the 64-byte
+> `JL_FW` "trailer" **is** the `tail.bin` entry of that table. The `.fw` wrapper carries the
+> same table, per-32-byte-line descrambled with a chipkey-seeded LFSR seed cycle. Full
+> details: [Ch. 24 §24.6](24-jieli-ecosystem-sdk-toolchain.md#246-containers-keys-flash-map--what-the-packagers-and-community-tools-proved).
+
 ---
 
 *[<< Index](Findings.md)*
