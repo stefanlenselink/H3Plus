@@ -26,7 +26,7 @@ patch makes any BT headset's mic the PTT transmit source, hardware-confirmed.
 | `findings/Findings.md` | **Index** of 23 numbered chapters; old §9A.x/§12A.x section numbers preserved inside chapters |
 | `findings/08–13-*.md` | The Bluetooth effort (§9A.1–9A.50) |
 | `findings/22-bluetooth-7-multipoint-architecture.md` | §9B: dual-device/multipoint analysis |
-| `findings/23-bluetooth-8-bt-ptt2.md` | §9C: BT-PTT2 (BT mic on VFO B) — trampoline + code cave design, **UNTESTED on hardware** |
+| `findings/23-bluetooth-8-bt-ptt2.md` | §9C: BT-PTT2 (BT mic on VFO B) — trampoline + code cave design, **hardware-confirmed 2026-09-30** |
 | `findings/24-jieli-ecosystem-sdk-toolchain.md` | §24: SDK/toolchain/packager ecosystem — ufw table, SFCENC registers, stack 1拖2 multipoint, official-objdump validation, flash map |
 | `tools/Tools.md` | Reference for every script in `tools/` (§1 patcher, §3 crypto, §4 static analysis, §6 BT rig, §7 test suites) |
 | `tools/isa/pi32v2.md` | The pi32v2 instruction-set notes; `pi32dis.py` parses it at runtime |
@@ -85,7 +85,7 @@ when relevant. GitHub anchor slugs: lowercase, punctuation dropped, spaces → d
 python tools/patch_h3plus_firmware_bluetooth.py <src> [<dst>] [--show]
     [--bluetooth-mode|--bt|-b 1-6]   # default 4 (duplex, HW-confirmed)
     [--PTT=BT-PTT|PTT] [--PTT2=...] [--OD-PTT=...]   # 20 action pairs build directly
-    #   actions: PTT PTT2 BT-PTT BT-PTT2 OD-PTT (BT-PTT2 = BT mic forced to VFO B, UNTESTED)
+    #   actions: PTT PTT2 BT-PTT BT-PTT2 OD-PTT (BT-PTT2 = BT mic forced to VFO B, HW-confirmed)
     [--sectors=PREFIX] [--only SITE]
 ```
 
@@ -173,15 +173,17 @@ scripts here, and none should be added.
 
 Done: both ciphers broken · classifier decoded · routing modes 1–6 mapped · key-remap
 patches HW-confirmed (BT-mic PTT, duplex) · patch tool + 2 test suites green ·
-multipoint architecture mapped (ch. 22) · BT-PTT2 implemented, 784 checks green —
-UNTESTED on hardware (ch. 23) · **ecosystem sweep: right SDK found (`fw-AC63_BT_SDK`
+multipoint architecture mapped (ch. 22) · **BT-PTT2 hardware-confirmed** (ch. 23:
+`--PTT=BT-PTT --PTT2=BT-PTT2 --OD-PTT=PTT` works with and without a headset; normal
+PTT unaffected, no `gp+0xC7` flag leak) · **ecosystem sweep: right SDK found (`fw-AC63_BT_SDK`
 `cpu/br23` = AC635N), `.ufw` table located, official objdump validated our disassembler
 (12,786 targets, 0 mismatches), stack API proves 1-to-2 multipoint** (ch. 24).
 
 Open (in priority order):
-1. **Hardware-validate BT-PTT2** (ch. 23 §9C.8): flash `--PTT2=BT-PTT2`, confirm TX on
-   VFO B with the headset mic and that the one-shot flag (`gp+0xC7`) never leaks into a
-   plain main-PTT/`+SPP=P` transmit.
+1. ~~Hardware-validate BT-PTT2~~ ✅ **PASSED 2026-09-30** (ch. 23 §9C.8): flashed
+   `--PTT=BT-PTT --PTT2=BT-PTT2 --OD-PTT=PTT`; works with and without headset, normal
+   PTT always works (no `gp+0xC7` leak). Cosmetic remainders: non-default menu-language
+   labels, `--PTT2=BT-PTT2 --OD-PTT=BT-PTT` combo.
 2. **Run `tools/bt_multipoint_probe.py <mac>` on Linux/hardware** — decides whether the
    H3's stack build accepts two concurrent ACL links. The SDK stack API supports 1拖2
    with call pre-empt/restore (ch. 24 §24.4); the probe settles the H3 build.

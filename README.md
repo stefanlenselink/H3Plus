@@ -94,7 +94,7 @@ Key options (full reference: [tools/Tools.md §1](tools/Tools.md)):
 |---|---|
 | `--bluetooth-mode` / `-b` `1–6` | BT audio routing mode (default 4 = full duplex, hardware-confirmed) |
 | `--PTT=BT-PTT\|PTT` | What the main PTT key does (default `BT-PTT` = transmit BT headset mic) |
-| `--PTT2=` / `--OD-PTT=` | `PTT` / `PTT2` / `BT-PTT` / `BT-PTT2` / `OD-PTT` for the side/overdrive keys (`BT-PTT2` = BT headset mic forced to VFO B — UNTESTED on hardware) |
+| `--PTT2=` / `--OD-PTT=` | `PTT` / `PTT2` / `BT-PTT` / `BT-PTT2` / `OD-PTT` for the side/overdrive keys (`BT-PTT2` = BT headset mic forced to VFO B — hardware-confirmed 2026-09-30) |
 | `--sectors=PREFIX` | Export only the changed 4 KiB sectors (safer flashing, see below) |
 
 ### 3. Acquire and set up jl-uboot-tool

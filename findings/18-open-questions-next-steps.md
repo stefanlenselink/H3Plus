@@ -23,13 +23,13 @@ Configuration workarounds are **ruled out** — `BT Int Mic` has no effect on a 
 
 See [§9A.7](08-bluetooth-1-discovery-and-whitelist.md#9a7-the-stretch-goal--ptt-button--separate-headset) and now [§9B](22-bluetooth-7-multipoint-architecture.md). The app layer is mapped: it models **one** remote device (single global struct at `0x102F0`, 809 refs). **Update 2026-09-30:** the stack layer is no longer undecided — the SDK's `btstack.a` API proves 1-to-2 multipoint with call pre-empt/restore is a supported stack feature ([Ch. 24 §24.4](24-jieli-ecosystem-sdk-toolchain.md#244-bt-stack--the-multipoint-answer-ch-22-open-question-b)), so an SDK rebuild is only needed if the H3's own build has the feature disabled or the app layer cannot be coaxed. `tools/bt_multipoint_probe.py` still settles it in one run on hardware. With the `mic` slot patched and the `ptt` slot intact, both devices are whitelisted — so this is now purely a question of multipoint capability.
 
-### Priority 1c — Hardware-validate `BT-PTT2` (BT mic on VFO B)
+### Priority 1c — Hardware-validate `BT-PTT2` (BT mic on VFO B) — ✅ DONE 2026-09-30
 
-`--PTT2=BT-PTT2` / `--OD-PTT=BT-PTT2` ([§9C](23-bluetooth-8-bt-ptt2.md)) builds and passes
-the byte-level suite, but is **UNTESTED on hardware**. Flash a build and check: PF key
-assigned to S Press = "BT PTT2" transmits the headset mic on **VFO B** while VFO A is the
-working VFO, and the one-shot flag leaks nothing — a subsequent main-PTT press must still
-transmit on the current VFO. Test label rendering in each menu language, and the
+`--PTT2=BT-PTT2` ([§9C](23-bluetooth-8-bt-ptt2.md)) is **hardware-confirmed**: flashed
+`--PTT=BT-PTT --PTT2=BT-PTT2 --OD-PTT=PTT` — the "BT PTT2" PF option transmits correctly
+both with and without a headset connected, and the normal `PTT` option always works
+whether Bluetooth is connected or not (the one-shot force-B flag leaks nothing). Only
+cosmetics remain open: label rendering in non-default menu languages and the
 `--PTT2=BT-PTT2 --OD-PTT=BT-PTT` combo (both BT labels at once).
 
 ### Priority 2 — Disassemble the decrypted app

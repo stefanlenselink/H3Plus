@@ -117,7 +117,7 @@ patch and the PF1/PF2 variants are **hardware-confirmed**.
   (`b[gp+0x46]`) is pinned to 1 by a one-shot flag (`gp+0xC7`) that the press body sets
   and the handler consumes. Implemented with a 4-byte trampoline over the native tail of
   that handler (`0x01E794DA`) into a 68-byte code cave at `0x01EA76DE` (verified ALLZERO
-  in v1.0.44/v1.0.50). **UNTESTED on hardware.** See Findings ch. 23.
+  in v1.0.44/v1.0.50). **Hardware-confirmed 2026-09-30.** See Findings ch. 23.
 
 ### Usage
 
@@ -162,13 +162,13 @@ ten unique combinations in either option order:
 | PTT + PTT2 | `--PTT2=PTT --OD-PTT=PTT2` or reversed | |
 | PTT + OD-PTT | `--PTT2=PTT --OD-PTT=OD-PTT` or reversed | |
 | PTT + BT-PTT | `--PTT2=PTT --OD-PTT=BT-PTT` or reversed | |
-| PTT + BT-PTT2 | `--PTT2=PTT --OD-PTT=BT-PTT2` or reversed | BT-PTT2 **UNTESTED** |
+| PTT + BT-PTT2 | `--PTT2=PTT --OD-PTT=BT-PTT2` or reversed | ✅ tested 2026-09-30 (`--PTT2=BT-PTT2 --OD-PTT=PTT`) |
 | PTT2 + OD-PTT | `--PTT2=PTT2 --OD-PTT=OD-PTT` | **stock** (default) |
 | PTT2 + BT-PTT | `--PTT2=PTT2 --OD-PTT=BT-PTT` or reversed | |
-| PTT2 + BT-PTT2 | `--PTT2=PTT2 --OD-PTT=BT-PTT2` or reversed | BT-PTT2 **UNTESTED** |
+| PTT2 + BT-PTT2 | `--PTT2=PTT2 --OD-PTT=BT-PTT2` or reversed | BT-PTT2 HW-confirmed; this pair untested |
 | OD-PTT + BT-PTT | `--PTT2=OD-PTT --OD-PTT=BT-PTT` or reversed | tightest stock combo; OD release also stops TX unconditionally (self-guarded) |
-| OD-PTT + BT-PTT2 | `--PTT2=OD-PTT --OD-PTT=BT-PTT2` or reversed | BT-PTT2 **UNTESTED** |
-| BT-PTT + BT-PTT2 | `--PTT2=BT-PTT --OD-PTT=BT-PTT2` or reversed | both BT mic; A-channel vs B-channel. **UNTESTED** |
+| OD-PTT + BT-PTT2 | `--PTT2=OD-PTT --OD-PTT=BT-PTT2` or reversed | BT-PTT2 HW-confirmed; this pair untested |
+| BT-PTT + BT-PTT2 | `--PTT2=BT-PTT --OD-PTT=BT-PTT2` or reversed | both BT mic; A-channel vs B-channel. BT-PTT2 HW-confirmed; this pair untested |
 
 **Refused:** same-action pairs (`--PTT2=PTT --OD-PTT=PTT`,
 `--PTT2=BT-PTT2 --OD-PTT=BT-PTT2` etc. — one option, one action; the tool prints the full
@@ -206,7 +206,7 @@ python tools/patch_h3plus_firmware_bluetooth.py Dumps/dump_internal.bin out.bin 
 python tools/patch_h3plus_firmware_bluetooth.py Dumps/dump_internal.bin out.bin --PTT2=OD-PTT --OD-PTT=BT-PTT
 
 # BT mic on the SECOND channel: PTT2 button transmits the headset mic over VFO B
-# (UNTESTED on hardware)
+# (hardware-confirmed 2026-09-30)
 python tools/patch_h3plus_firmware_bluetooth.py Dumps/dump_internal.bin out.bin --PTT2=BT-PTT2
 
 # both BT-mic actions at once: OD slot = BT mic on VFO A, PTT2 slot = BT mic on VFO B

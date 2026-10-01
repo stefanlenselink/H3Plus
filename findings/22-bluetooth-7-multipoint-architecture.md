@@ -154,6 +154,11 @@ Two space results matter for any trampoline plan:
    candidate, `0x01EA76DE` (364 B, all-zero in 44/45/50), died when a pointer at
    `0x01E52F26` (`r5 = 0x1EA77A0`) was found feeding it to a draw call at `0x01E507CC`
    — it is a runtime draw buffer, not padding.
+   **Update 2026-09-30:** [Ch. 23](23-bluetooth-8-bt-ptt2.md) reclaimed the *head* of
+   this run — the BT-PTT2 code occupies cave+0…+68, while the draw buffer starts at
+   cave+194 (`0x01EA77A0`), 126 B clear — consistent with the hardware validation
+   passing. The verdict stands for the whole run; only the first 194 B are usable,
+   and only if code stays under that.
 2. **Beyond the app there is a desert.** The hardware dump
    (`Dumps/dump_internal.bin`) shows `0x0CA000`–`0x0FC000` — **~208 KiB — completely
    erased (0xFF)**, with a 10-byte remnant at `0x0FD000`

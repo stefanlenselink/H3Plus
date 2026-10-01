@@ -2,12 +2,14 @@
 
 # Bluetooth HFP — 8. BT-PTT2: the Bluetooth mic on the second channel (§9C)
 
-> [!WARNING]
-> **Everything in this chapter is UNTESTED on hardware.** The patches build, pass the
-> full byte-level suite (`tools/verify_actions.py`, 784 checks / 0 failures) and the
-> disassembly semantics are verified statically — but no radio has been flashed with a
-> `BT-PTT2` image yet. Flashing is the user's action; report results back before this
-> chapter's status changes.
+> [!TIP]
+> **Hardware-confirmed 2026-09-30.** Flashed build:
+> `--PTT=BT-PTT --PTT2=BT-PTT2 --OD-PTT=PTT`. The `BT-PTT2` option transmits as
+> expected, **both with and without a Bluetooth headset connected**, and the normal
+> `PTT` option keeps working in all cases (BT connected or not) — the one-shot
+> force-B flag leaks into nothing. Remaining cosmetic unknowns: label rendering in
+> non-default menu languages and the `--PTT2=BT-PTT2 --OD-PTT=BT-PTT` both-BT-labels
+> combo (§9C.8).
 
 ### 9C.1 Goal
 
@@ -50,8 +52,12 @@ but the tail above is replaced by a 4-byte absolute goto into a verified-zero ca
   The native 14 bytes are kept as the `native` known-state so stock and patched images
   are both recognised.
 - **Code cave** (`pfcave`): 68 B used of a 364 B run @`0x01EA76DE` that is ALLZERO in
-  v1.0.44, v1.0.45 **and** v1.0.50 (`tools/freespace.py --other`), and survives the
-  every-2-byte-aligned LE pointer scan (no runtime data references it).
+  v1.0.44, v1.0.45 **and** v1.0.50 (`tools/freespace.py --other`). [§9B.7](22-bluetooth-7-multipoint-architecture.md)
+  rejected this run because of the immediate `r5 = 0x1EA77A0` @`0x01E52F24` feeding a
+  draw call @`0x01E507CC` — that buffer sits at cave **+194**, 126 B clear of the 68 B
+  used here, so the two do not collide — consistent with the hardware validation passing
+  (2026-09-30). Keep any future code in this run under 194 B, or beyond the draw
+  buffer's full extent (not mapped) — never straddling cave+194.
 
 Cave layout (`CAVE_VA = 0x01EA76DE`):
 
@@ -168,8 +174,13 @@ spanning `"PTT2\0NET\0"`.) The Russian lists re-point their `None` entries to
 - Byte cost (with default `--PTT=BT-PTT`, on a full dump): `--PTT2=BT-PTT2` alone 117 B,
   `--OD-PTT=BT-PTT2` alone 123 B, `--PTT2=BT-PTT --OD-PTT=BT-PTT2` 156 B.
 
-**To validate on hardware** (UNTESTED): flash a `--PTT2=BT-PTT2` build, assign a PF key
-to S Press = "BT PTT2", link a BT headset (mode 2/4), select VFO A as the working VFO,
-press the key — expected: TX on VFO B with the headset mic. Then release, press the main
-PTT — expected: TX on VFO A (the flag must not leak). Also test the reverse-assignment
-combo `--PTT2=BT-PTT2 --OD-PTT=BT-PTT` for label rendering in each menu language.
+**Hardware validation — PASSED 2026-09-30** (user, on radio): flashed
+`--PTT=BT-PTT --PTT2=BT-PTT2 --OD-PTT=PTT`. The "BT PTT2" PF option transmits on VFO B
+with the BT mic **both with and without a headset connected** (no headset ⇒ the normal
+graceful fallback to the internal mic), and the `PTT` option on the other PF key keeps
+working in every case — BT connected or not — confirming the one-shot force-B flag at
+`gp+0xC7` never leaks into a plain main-PTT / `+SPP=P` transmit.
+
+Still open (cosmetic only): label rendering of the two BT options in non-default menu
+languages, and the reverse-assignment combo `--PTT2=BT-PTT2 --OD-PTT=BT-PTT` (both PF
+keys carrying BT labels).
