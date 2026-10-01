@@ -28,9 +28,11 @@ See [§9A.7](08-bluetooth-1-discovery-and-whitelist.md#9a7-the-stretch-goal--ptt
 `--PTT2=BT-PTT2` ([§9C](23-bluetooth-8-bt-ptt2.md)) is **hardware-confirmed**: flashed
 `--PTT=BT-PTT --PTT2=BT-PTT2 --OD-PTT=PTT` — the "BT PTT2" PF option transmits correctly
 both with and without a headset connected, and the normal `PTT` option always works
-whether Bluetooth is connected or not (the one-shot force-B flag leaks nothing). Only
-cosmetics remain open: label rendering in non-default menu languages and the
-`--PTT2=BT-PTT2 --OD-PTT=BT-PTT` combo (both BT labels at once).
+whether Bluetooth is connected or not (the one-shot force-B flag leaks nothing). Label
+rendering across all nine menu languages is now **verified statically** ([§9C.9](23-bluetooth-8-bt-ptt2.md#9c9-label-rendering--static-verification-across-all-languages-2026-10-01)):
+stock never localises these labels, and all 20 combos re-scan clean. One cosmetic
+hardware check remains: the `--PTT2=BT-PTT2 --OD-PTT=BT-PTT` combo displaying
+`"BT2"` / `"BT PTT"`.
 
 ### Priority 2 — Disassemble the decrypted app
 

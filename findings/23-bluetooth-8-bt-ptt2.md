@@ -7,9 +7,9 @@
 > `--PTT=BT-PTT --PTT2=BT-PTT2 --OD-PTT=PTT`. The `BT-PTT2` option transmits as
 > expected, **both with and without a Bluetooth headset connected**, and the normal
 > `PTT` option keeps working in all cases (BT connected or not) — the one-shot
-> force-B flag leaks into nothing. Remaining cosmetic unknowns: label rendering in
-> non-default menu languages and the `--PTT2=BT-PTT2 --OD-PTT=BT-PTT` both-BT-labels
-> combo (§9C.8).
+> force-B flag leaks into nothing. Label rendering across all nine menu languages is
+> verified statically (§9C.9); only the visual check of the
+> `--PTT2=BT-PTT2 --OD-PTT=BT-PTT` (`"BT2"` / `"BT PTT"`) combo remains.
 
 ### 9C.1 Goal
 
@@ -144,7 +144,7 @@ depending on which strings are still free:
 | combo | label | where |
 |---|---|---|
 | `BT-PTT2` alone (no `BT-PTT`) | `BT PTT2` | over `"PTT2"` + 3 B of `"NET"` @`0x01E8E313` |
-| `BT-PTT2` + `PTT2` kept | `BT2` | over `"NET"` tail @`0x01E8E317` |
+| `BT-PTT2` + `PTT2` kept | `BT2` | over `"NET"[0:4]` @`0x01E8E313` |
 | `BT-PTT2` + `BT-PTT` | `BT2` | over `"PTT2"`; `BT-PTT` keeps `"BT PTT"` over `"NET"` |
 
 (The short `BT2` form is needed because both BT labels must coexist in the 8 bytes
@@ -181,6 +181,42 @@ graceful fallback to the internal mic), and the `PTT` option on the other PF key
 working in every case — BT connected or not — confirming the one-shot force-B flag at
 `gp+0xC7` never leaks into a plain main-PTT / `+SPP=P` transmit.
 
-Still open (cosmetic only): label rendering of the two BT options in non-default menu
-languages, and the reverse-assignment combo `--PTT2=BT-PTT2 --OD-PTT=BT-PTT` (both PF
-keys carrying BT labels).
+Still open (cosmetic only): visual confirmation of the reverse-assignment combo
+`--PTT2=BT-PTT2 --OD-PTT=BT-PTT` (both PF keys carrying BT labels — the labels are
+`"BT2"` and `"BT PTT"`, see §9C.9). The non-default-language question was answered
+statically in §9C.9.
+
+### 9C.9 Label rendering — static verification across all languages (2026-10-01)
+
+The "other menu languages" concern is **resolved statically**: the stock firmware never
+localises these labels.
+
+- The nine PF S Press lists were located and dumped — languages **en, zh (GBK), tr,
+  ru (UTF-8), de, es, it, fr, th** (two lists @`0x01EBD728`/`0x01EBD748`, seven
+  contiguous @`0x01EBF08C`…`0x01EBF184`). All nine show English `PTT2` / `OD PTT` in
+  stock — no language has localised PTT labels, so the patched English labels
+  (`BT PTT` / `BT PTT2` / `BT2` / `PTT`) match the stock convention in every language.
+- **Reference model verified** on the stock image (full-image 2-byte-aligned LE scan):
+  `"PTT2"` @`0x01E8E30E` has exactly **9** refs (the nine PF lists only); RU `"НЕТ"`
+  @`0x01E8E313` exactly **3** refs (identical to `RU_NONE_PTRS`); `"OD PTT"`
+  @`0x01E8CE54` **17** refs (9 PF lists + 8 other menus — never modified by the patch);
+  `"PTT"` tail @`0x01E8CE57` **0** stock refs. The RU fallback `"Нет"` @`0x01E92010`
+  exists in a multilingual "None" string block and is already referenced elsewhere
+  (`0x01EC1304`), so its glyphs render.
+- **All 20 action pairs** were rebuilt from `_label_sites()` and independently
+  re-verified: native bytes and guards match at every site; string placements never
+  overlap; every pointer in the whole patched image landing inside the
+  `"PTT2\0НЕТ\0"` block reads a complete intended string (no mangled fragments); all
+  nine lists' entries 6/7 read the expected labels; the RU `None` entries re-point to
+  `"Нет"` exactly when the `"НЕТ"` bytes are destroyed; `"OD PTT"` and its 8 non-PF
+  refs stay intact. 0 failures / 20 combos (on top of the tool's own 784-check suite,
+  also green).
+- The lists are reached by computed addressing (no literal pointer to any list start
+  exists in the image) — irrelevant to patching, which rewrites fixed VAs in all nine.
+- Label table per combo (the tool's placement rules, now verified): `BT-PTT2` renders
+  **"BT PTT2"** unless the other slot keeps `PTT2` or is `BT-PTT`, in which case it
+  renders **"BT2"**; `BT-PTT` always renders **"BT PTT"**.
+
+Remaining hardware check (cosmetic): flash `--PTT2=BT-PTT2 --OD-PTT=BT-PTT` and confirm
+options 7/8 display **"BT2"** and **"BT PTT"**; optionally glance at the Russian menu's
+`None` item (`Нет`).
