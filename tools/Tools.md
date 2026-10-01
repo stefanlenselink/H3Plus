@@ -168,7 +168,7 @@ ten unique combinations in either option order:
 | PTT2 + BT-PTT2 | `--PTT2=PTT2 --OD-PTT=BT-PTT2` or reversed | BT-PTT2 HW-confirmed; this pair untested |
 | OD-PTT + BT-PTT | `--PTT2=OD-PTT --OD-PTT=BT-PTT` or reversed | tightest stock combo; OD release also stops TX unconditionally (self-guarded) |
 | OD-PTT + BT-PTT2 | `--PTT2=OD-PTT --OD-PTT=BT-PTT2` or reversed | BT-PTT2 HW-confirmed; this pair untested |
-| BT-PTT + BT-PTT2 | `--PTT2=BT-PTT --OD-PTT=BT-PTT2` or reversed | both BT mic; A-channel vs B-channel. BT-PTT2 HW-confirmed; this pair untested |
+| BT-PTT + BT-PTT2 | `--PTT2=BT-PTT --OD-PTT=BT-PTT2` or reversed | both BT mic; A-channel vs B-channel. ✅ labels + function HW-confirmed 2026-10-01 (`--PTT2=BT-PTT2 --OD-PTT=BT-PTT` → "BT2"/"BT PTT") |
 
 **Refused:** same-action pairs (`--PTT2=PTT --OD-PTT=PTT`,
 `--PTT2=BT-PTT2 --OD-PTT=BT-PTT2` etc. — one option, one action; the tool prints the full

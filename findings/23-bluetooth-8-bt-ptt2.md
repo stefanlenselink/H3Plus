@@ -7,9 +7,10 @@
 > `--PTT=BT-PTT --PTT2=BT-PTT2 --OD-PTT=PTT`. The `BT-PTT2` option transmits as
 > expected, **both with and without a Bluetooth headset connected**, and the normal
 > `PTT` option keeps working in all cases (BT connected or not) — the one-shot
-> force-B flag leaks into nothing. Label rendering across all nine menu languages is
-> verified statically (§9C.9); only the visual check of the
-> `--PTT2=BT-PTT2 --OD-PTT=BT-PTT` (`"BT2"` / `"BT PTT"`) combo remains.
+> force-B flag leaks into nothing. Label rendering is verified across all nine menu
+> languages — statically (§9C.9) and on the display (2026-10-01: the
+> `--PTT2=BT-PTT2 --OD-PTT=BT-PTT` combo shows `"BT2"` / `"BT PTT"` correctly).
+> `BT-PTT2` is fully validated.
 
 ### 9C.1 Goal
 
@@ -181,10 +182,9 @@ graceful fallback to the internal mic), and the `PTT` option on the other PF key
 working in every case — BT connected or not — confirming the one-shot force-B flag at
 `gp+0xC7` never leaks into a plain main-PTT / `+SPP=P` transmit.
 
-Still open (cosmetic only): visual confirmation of the reverse-assignment combo
-`--PTT2=BT-PTT2 --OD-PTT=BT-PTT` (both PF keys carrying BT labels — the labels are
-`"BT2"` and `"BT PTT"`, see §9C.9). The non-default-language question was answered
-statically in §9C.9.
+Cosmetic follow-up also closed (2026-10-01): the reverse-assignment combo
+`--PTT2=BT-PTT2 --OD-PTT=BT-PTT` was flashed and its labels (`"BT2"` / `"BT PTT"`)
+confirmed correct on the display, matching the §9C.9 static prediction exactly.
 
 ### 9C.9 Label rendering — static verification across all languages (2026-10-01)
 
@@ -217,6 +217,7 @@ localises these labels.
   **"BT PTT2"** unless the other slot keeps `PTT2` or is `BT-PTT`, in which case it
   renders **"BT2"**; `BT-PTT` always renders **"BT PTT"**.
 
-Remaining hardware check (cosmetic): flash `--PTT2=BT-PTT2 --OD-PTT=BT-PTT` and confirm
-options 7/8 display **"BT2"** and **"BT PTT"**; optionally glance at the Russian menu's
-`None` item (`Нет`).
+Hardware check closed (2026-10-01): flashed `--PTT2=BT-PTT2 --OD-PTT=BT-PTT` — the
+display shows **"BT2"** and **"BT PTT"** as predicted. Every BT-PTT2 placement is now
+confirmed on real hardware or statically verified; nothing in this chapter remains
+untested.

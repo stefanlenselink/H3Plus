@@ -184,8 +184,8 @@ Open (in priority order):
    `--PTT=BT-PTT --PTT2=BT-PTT2 --OD-PTT=PTT`; works with and without headset, normal
    PTT always works (no `gp+0xC7` leak). Label rendering verified statically for all
    nine menu languages (ch. 23 §9C.9 — stock never localises these labels; all 20 combos
-   re-scan clean). Only visual check left: `--PTT2=BT-PTT2 --OD-PTT=BT-PTT` should show
-   "BT2" / "BT PTT".
+   re-scan clean) and on the display (2026-10-01: `--PTT2=BT-PTT2 --OD-PTT=BT-PTT`
+   shows "BT2"/"BT PTT" correctly). BT-PTT2 fully validated; nothing in ch. 23 untested.
 2. **Run `tools/bt_multipoint_probe.py <mac>` on Linux/hardware** — decides whether the
    H3's stack build accepts two concurrent ACL links. The SDK stack API supports 1拖2
    with call pre-empt/restore (ch. 24 §24.4); the probe settles the H3 build.
