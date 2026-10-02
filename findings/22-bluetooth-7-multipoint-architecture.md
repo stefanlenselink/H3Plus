@@ -151,6 +151,19 @@ approved (silent `bluetoothctl pair` did not complete it).
    (host = button role), connecting a **real headset** to the radio killed the host's
    SPP link (radio voice-announced connect/disconnect throughout). A second *physical*
    device evicts the first.
+3. **Reverse 2-ACL test: REFUSED — the radio is not even connectable.** Headset
+   connected first, then `tools/bt_spp_hold.py` → `SPP connect … failed: [Errno 112]
+   Host is down` in ~0 s. `EHOSTDOWN` = the page itself failed (no page-scan response),
+   i.e. while a device is connected the radio stops accepting incoming connections at
+   the baseband level — not an RFCOMM-level refusal (that would be `ECONNREFUSED`).
+
+**Admission policy, fully characterised:** exactly **one active remote device**; a new
+radio-initiated connection **evicts** the incumbent; incoming connections while
+connected are **not possible** (radio not connectable). "Single-slot, evict-on-join."
+For the stretch goal a patch therefore needs *both* (a) keep page scan on while
+connected and (b) suppress the eviction — or the second device must be brought in the
+way the headset was (radio-initiated), which for an SPP button means the radio must
+dial out, see §9B.9.
 
 **Reading.** The two probe legs come from one host, so BlueZ multiplexes ch2+ch6 over a
 **single ACL** — i.e. one remote device with two profile connections, exactly what the
@@ -214,16 +227,52 @@ Two space results matter for any trampoline plan:
 
 1. ~~Run 9B.6 on hardware~~ ✅ **done 2026-10-01** (§9B.6.1): profile-level multipoint
    OK; second physical device evicts the first.
-2. **Reverse 2-ACL test** (quick, hardware): headset connected first, then
-   `tools/bt_spp_hold.py` from the host — does the SPP connect get *refused*, or does it
-   *evict the headset*? Distinguishes "evict-old" from "refuse-new" admission, which
-   decides what the patch must change.
-3. **Static: locate the eviction path** — the new-ACL-connect handler reached via the
-   ops table (§9B.1)/dispatcher (§9B.2) and the disconnect call it makes on the existing
-   link; the official LLVM objdump (Ch. 24 §24.5) + `tools/xref.py`/`findva.py` are the
-   tools. Ghidra (quarkslab/ghidra-jieli) makes this tractable at scale.
+2. ~~Reverse 2-ACL test~~ ✅ **done 2026-10-02** (§9B.6.1 item 3): `EHOSTDOWN` — the
+   radio is not connectable while a device is connected. Refuse-new (page level) +
+   evict-old (radio-initiated joins). Optional sanity checks: while the headset is up,
+   does the radio still appear in `bluetoothctl scan on` (inquiry scan), and does
+   `bt_spp_hold.py` work again immediately after the headset disconnects?
+3. **Static: locate the eviction path** — largely reframed by §9B.10: the cap is the
+   `user_ctrl_conn_num` 2-bit gate (our struct at `0x01EC2064`, flag byte offset 21)
+   enforced by the stack. Remaining: find the init call `__set_user_ctrl_conn_num(1)`
+   and the enforcement reads in our older-generation build (Ghidra on the
+   `.bt_stack_code` region; start from what reads byte 21 of the RAM copy), then test
+   gate=2.
 4. If the eviction is classifier-conditional, the 9B.5 constant-routing-byte experiment
    (2–4 byte patch) may combine with disabling the kick.
 5. Route C (SDK rebuild with 1拖2) stays the fallback — the SDK is now on disk
    (`fw-AC63_BT_SDK`, `cpu/br23`); Route B (erased flash) is **deprioritised** —
    ch. 24 §24.6 showed the span is VM-reserved.
+
+### 9B.10 The admission gate, found in the SDK (2026-10-02)
+
+The 2025 `data_trans_sdk` bitcode (`cpu/br23/liba/btstack.a` is **LLVM IR bitcode**,
+readable with the official toolchain's `clang -S -emit-llvm`) exposes the exact
+mechanism:
+
+- `__set_user_ctrl_conn_num(num)` (`user_interface.c`) writes a **2-bit field
+  `user_ctrl_conn_num`** at bit 140 (byte 17, bits 4-5) of the global
+  `_stack_config` struct — same byte as `auto_conn_device_num` (bits 0-3) and
+  `hid_independent_flag` (bit 6). The SDK apps call `__set_user_ctrl_conn_num(1)`
+  once at init (`apps/*/modules/bt/app_comm_edr.c:242`) — that single `1` is the
+  one-device cap; the stack then enforces it (evict-on-join).
+- The connectable toggle is app-side: `bt_hci_event_connection()` calls
+  `bt_wait_connect_active_enable(0)` → `USER_CTRL_WRITE_CONN_DISABLE` (page scan off)
+  on connect, re-enabled on disconnect — exactly the `EHOSTDOWN` we measured in
+  §9B.6.1 item 3.
+
+**Our firmware's copy:** the `_stack_config` instance sits at VA **`0x01EC2064`**
+(unique CoD `0x240404` = `BD_CLASS_WEARABLE_HEADSET`, sniff intervals 8000/8000 ms).
+Its layout carries **two extra i16 fields** before the flag byte vs the 2025 SDK
+sample (flag byte at offset **21**, value `0x11` = auto-conn 1, **conn_num 1**,
+hid-indep 0). No literal pointer to it exists in the image — it is reached via the
+bulk-copied `.bt_stack_data` RAM section.
+
+**Caveat:** the H3's stack build is an **older SDK generation** — the compiled form of
+`__set_user_ctrl_conn_num` (and its 40-bit bitfield RMW) does not byte-match the 2025
+toolchain output, so the init call site and the stack's enforcement reads are not yet
+located in our image. Ghidra decompilation of the `.bt_stack_code` region (entry:
+find what reads byte 21 of the RAM copy) is the way to finish this. A candidate
+experiment once located: flip the gate to 2 (init call arg and/or the RAM byte) and
+re-run §9B.6.1 — the stack may then hold two ACLs natively (1拖2), making the stretch
+goal a 1–2 byte patch.

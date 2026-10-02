@@ -189,8 +189,12 @@ Open (in priority order):
 2. ~~Run `tools/bt_multipoint_probe.py <mac>` on Linux/hardware~~ ✅ **RUN 2026-10-01**
    (ch. 22 §9B.6.1): profile-level multipoint OK (SPP+HFP concurrent over one ACL, PTT
    keys with both up); a second *physical* device (real headset) **evicts** the first —
-   the cap is the app's single-active-device policy, not the stack. Next: reverse-order
-   2-ACL test (refuse vs evict?) + static hunt for the eviction path (§9B.1/9B.2).
+   the cap is the app's single-active-device policy, not the stack. Reverse 2-ACL test
+   done 2026-10-02: `EHOSTDOWN` — radio not connectable while connected (page-level
+   refuse). Policy = one active device; radio-initiated joins evict; incoming refused.
+   Gate found in SDK bitcode (ch. 22 §9B.10): `user_ctrl_conn_num` 2-bit field, our
+   `_stack_config` @`0x01EC2064` (flag byte +21 = `0x11`). Next: locate init call +
+   enforcement reads in our older-gen build (Ghidra), then test gate=2.
 3. Ghidra + quarkslab/ghidra-jieli (pi32v2, ELF machine 0xF1) on Linux; import
    `work/app_dec.bin` at `0x01E00000`. The official toolchain objdump (ch. 24 §24.5) is
    now the ground truth for decoding; Ghidra adds decompilation.

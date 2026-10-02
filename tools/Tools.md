@@ -835,9 +835,12 @@ Run on the Linux box with the radio paired (and preferably the only paired host)
 
 **Result 2026-10-01:** `MULTIPOINT OK` at profile level (SPP+HFP concurrent, PTT keys
 with both up, both orders) — but note both legs come from one host = one ACL link.
-The follow-up two-ACL test (real headset joining while `bt_spp_hold.py` holds SPP)
-showed **kick-on-connect**: the radio evicts the first device when a second physical
-device connects. The ceiling is the app's single-active-device policy, not the stack.
+The follow-up two-ACL tests showed **kick-on-connect** (real headset joining while
+`bt_spp_hold.py` holds SPP evicts the host) and, in reverse (headset first, then
+`bt_spp_hold.py`), `[Errno 112] Host is down` — the radio is not connectable at all
+while a device is connected. Policy: one active device; radio-initiated joins evict;
+incoming connections are refused at the page level. The ceiling is the app's
+single-active-device policy, not the stack.
 Details: [§9B.6.1](../findings/22-bluetooth-7-multipoint-architecture.md).
 
 ---
