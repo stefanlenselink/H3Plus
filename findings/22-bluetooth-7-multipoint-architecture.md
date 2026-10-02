@@ -261,18 +261,110 @@ mechanism:
   on connect, re-enabled on disconnect — exactly the `EHOSTDOWN` we measured in
   §9B.6.1 item 3.
 
-**Our firmware's copy:** the `_stack_config` instance sits at VA **`0x01EC2064`**
-(unique CoD `0x240404` = `BD_CLASS_WEARABLE_HEADSET`, sniff intervals 8000/8000 ms).
-Its layout carries **two extra i16 fields** before the flag byte vs the 2025 SDK
-sample (flag byte at offset **21**, value `0x11` = auto-conn 1, **conn_num 1**,
-hid-indep 0). No literal pointer to it exists in the image — it is reached via the
-bulk-copied `.bt_stack_data` RAM section.
+**Our firmware's copy (candidate):** a `_stack_config`-shaped initialiser sits at
+VA **`0x01EC2064`**. It is the image's only copy of CoD `0x240404`
+(`BD_CLASS_WEARABLE_HEADSET`), followed by the 8000/8000 timeouts that also appear
+in the SDK default:
 
-**Caveat:** the H3's stack build is an **older SDK generation** — the compiled form of
-`__set_user_ctrl_conn_num` (and its 40-bit bitfield RMW) does not byte-match the 2025
-toolchain output, so the init call site and the stack's enforcement reads are not yet
-located in our image. Ghidra decompilation of the `.bt_stack_code` region (entry:
-find what reads byte 21 of the RAM copy) is the way to finish this. A candidate
-experiment once located: flip the gate to 2 (init call arg and/or the RAM byte) and
-re-run §9B.6.1 — the stack may then hold two ACLs natively (1拖2), making the stretch
-goal a 1–2 byte patch.
+```
+01EC2064  04 04 24 00 40 1f 40 1f 00 00 00 00 00 00 00 00
+01EC2074  00 00 3c 35 00 11 08 04 23 01 46 1e 0a 00 00 00
+```
+
+Its layout matches **neither** SDK generation exactly (§9B.10.1). In the old-gen
+layout the flag byte (+14) is `0x00`. In the 2025 layout +17 is also `0x00`. Under
+the earlier guess of two extra i16 fields, the byte at +21 is `0x11` (auto-conn 1,
+conn_num 1), but that alignment is **unproven**. No literal pointer to the blob, or
+to anything in `0x01EC2000–0x01EC20FF`, exists in the image. Presumably it is copied
+in bulk to RAM as part of `.bt_stack_data`.
+
+#### 9B.10.1 Static matching against the older-generation SDK (2026-10-02)
+
+**Older-gen reference recovered.** `fw-AC630N_BT_SDK/include_lib/liba/bd29/btstack.a`
+is also LLVM IR bitcode. Copy each member to `*.bc` before running
+`clang -S -emit-llvm`, because clang treats a `.o` input as linker input and emits
+nothing. In that build, `__set_user_ctrl_conn_num` is a plain 32-bit RMW on struct
+field 8 at byte offset 14 of a **packed** `_stack_config`:
+
+```
+w = *(u32*)(cfg + 14);  w = (w & ~0x30) | ((num << 4) & 0x30);  *(u32*)(cfg + 14) = w;
+```
+
+The AC630N apps call it as `__set_user_ctrl_conn_num(TCFG_BD_NUM)`
+(`apps/spp_and_le/app_spp_and_le.c:60`, `apps/hid/app_keyboard.c:249`, …). In older
+SDKs the cap is therefore a board-config macro, not a literal `1`.
+
+Old-gen `_stack_config` layout, decoded from the bitcode's debug info:
+
+| Byte.bit | Size (bits) | Field |
+|---|---|---|
+| 0 | 32 | `hci_dev_class` (CoD) |
+| 4 / 6 / 8 | 16 each | `page_timeout` / `super_timeout` / `pending_sdp_handler` |
+| 10 / 11 / 12 / 13 | 8 each | `update_battery_timeout` / `sbc_cap_bitpoola` / `support_profile` / `background_goback` |
+| **14.0** | 4 | `auto_conn_device_num` |
+| **14.4** | **2** | **`user_ctrl_conn_num`** ← the gate |
+| 14.6 / 14.7 | 1 / 1 | `hid_independent_flag` / `support_aac` |
+| 15.0–15.7 | 1 each | `support_aptx`, `support_ldac`, `support_msbc`, `simple_pair_en`, `display_battery`, `disable_sco`, `esco_coder_busy_flag`, **`hfp_switch`** |
+| 16.0–16.3 | 1 each | **`hfp_restore`**, `own_remote_test_flag`, `music_break_in_flag`, `emitter_enable` |
+| 17 | 2/2/4 | `io_capabilities` / `oob_authentication_data` / `authentication_requirements` |
+| 18 / 19 / 20 / 21 | 8 each | `auto_pause_when_interrupt` / `sound_come_cnt` / `sound_go_cnt` / `phone_history_call_num` |
+| 22 | 48 | `esco_addr` |
+
+Field 8 is the stack's central feature-flag word. Its other setters are
+`__set_auto_conn_device_num`, `__bt_set_hid_independent_flag`,
+`__set_support_msbc/aac/aptx/ldac_flag` and `__set_simple_pair_flag`, all in
+`user_interface.c`.
+
+**Matching our image.** A full listing was regenerated with the official objdump into
+`work/official/official.lst` (316,896 lines). The recipe is in ch. 24 §24.5.
+
+- **No byte match** for either SDK generation's compiled setter. Neither the 2025
+  40-bit RMW nor `& 0xFFFFFFCF` followed by `<< 4` / `& 0x30` appears as a
+  contiguous sequence.
+- Clear-bits-4–5 memory RMWs (`& 0xFFFFFFCF`) at `0x01E44D20`, `0x01E69ECA` and
+  `0x01E71B7E` were inspected. All are peripheral or SFR bit twiddles (hardware base
+  addresses). **None is the setter.**
+- Two RMWs that set bits 4–5 to **1** remain **uninvestigated**:
+  - `0x01E182CC`: byte at RAM `0xBF39`, `&~0x30 | 0x10`.
+  - `0x01E038E4`: halfword `h[r0+2] & 0xFFFFFFCF | 0x10`, on a struct at `r4+96`.
+- **One near-miss, probably a false lead:** `0x01E22A56–0x01E22A82` is a
+  bitfield-store tail inside a 27-way `tbh` command dispatcher (prologue
+  `0x01E22890`). It writes 2-bit fields of RAM byte **`0xC54C`** at shifts 2, 4 and 6
+  (`<<2 &0xC`, `<<4 &0x30`, `<<6 &0xC0`), and the `<<4 &0x30` case has the exact
+  conn_num shape. However:
+  - The neighbouring fields do not follow the old-gen layout (4-bit/2-bit/1-bit/1-bit).
+    The byte is laid out as four 2-bit fields.
+  - The other readers of `0xC54C` (`0x01E0731E`, `0x01E073A2`, `0x01E07520`) sit in
+    the LE HCI command builders. `0x01E073A2` extracts 2-bit fields of the byte and
+    sends opcode **`0x2006`** (`LE_Set_Advertising_Parameters`) through the HCI-send
+    helper `0x01E029DE`. Its neighbours send `0x200A`, `0x200C`, `0x200D` and
+    `0x2013`.
+  - **Reading:** `0xC54C` is most likely a **BLE advertising-config byte**
+    (adv type, own/peer addr type, filter policy), not the BR/EDR conn gate.
+    Recorded so it is not chased again.
+- `0xC54C` is only ever referenced as an absolute immediate (4 sites). No pointer to
+  a plausible struct base exists in the image: neither `0xC53E` (old-gen +14 base)
+  nor `0xC53B` (2025 +17 base). `0xC538` is a linked-list head (`0x01E06A6E`).
+- **Unfinished:** a scan of the old-gen objects for *readers* of field 8 bits 4–5,
+  i.e. the enforcement site whose compiled form we would then match. It converted
+  only `user_interface` because of the `.o`/`.bc` pitfall above, so it is
+  inconclusive. Rerun it with `.bc` copies.
+
+**Status.** The gate's mechanism and the old-gen layout are known. The H3's own
+setter, its init call, and the RAM copy of `_stack_config` are **not yet located**.
+Byte and shape matching has run out. Next options:
+
+1. Check the two uninvestigated bits-4–5 := 1 RMWs (`0x01E182CC`, `0x01E038E4`).
+   A conn_num init writes exactly that value.
+2. Rerun the old-gen object scan correctly, so the *enforcement* reader
+   (likely in the connection/page-scan path, `hci_vendor`/`gap`/`btstack_main`) can
+   be fingerprinted.
+3. Ghidra decompilation of the stack code region, followed by data-flow from the
+   `0x01EC2064` blob's RAM copy.
+4. Find the `.bt_stack_data` copy loop: a memcpy whose source range covers
+   `0x01EC2064`. That gives the RAM base, and then field 8's absolute address.
+
+Experiment once located: set the gate to 2 (init-call argument or the
+flash-initialised byte) and rerun §9B.6.1. The stack may then hold two ACLs natively
+(1拖2). This is **untested**, and the page-scan-off in the app's connect handler
+would still have to be addressed for incoming joins.

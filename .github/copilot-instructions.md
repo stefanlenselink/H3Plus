@@ -192,9 +192,11 @@ Open (in priority order):
    the cap is the app's single-active-device policy, not the stack. Reverse 2-ACL test
    done 2026-10-02: `EHOSTDOWN` — radio not connectable while connected (page-level
    refuse). Policy = one active device; radio-initiated joins evict; incoming refused.
-   Gate found in SDK bitcode (ch. 22 §9B.10): `user_ctrl_conn_num` 2-bit field, our
-   `_stack_config` @`0x01EC2064` (flag byte +21 = `0x11`). Next: locate init call +
-   enforcement reads in our older-gen build (Ghidra), then test gate=2.
+   Gate found in SDK bitcode (ch. 22 §9B.10): `user_ctrl_conn_num` 2-bit field
+   (old-gen AC630N layout: `_stack_config` byte 14 bits 4–5, §9B.10.1). Candidate
+   initialiser blob @`0x01EC2064` (alignment unproven); setter not byte/shape-matched;
+   RAM `0xC54C` ruled out (LE adv config). Next: find `.bt_stack_data` copy loop /
+   Ghidra, check RMWs @`0x01E182CC`/`0x01E038E4`, then test gate=2.
 3. Ghidra + quarkslab/ghidra-jieli (pi32v2, ELF machine 0xF1) on Linux; import
    `work/app_dec.bin` at `0x01E00000`. The official toolchain objdump (ch. 24 §24.5) is
    now the ground truth for decoding; Ghidra adds decompilation.
