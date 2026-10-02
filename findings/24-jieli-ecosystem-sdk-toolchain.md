@@ -209,9 +209,12 @@ size shrunk via `VM_LEN` semantics before use.
 - ~~JieLi SDK acquisition~~ ✅ CLOSED — `fw-AC63_BT_SDK` covers br23/AC635N (§24.1).
 - ~~Stack-layer max-link policy~~ ✅ largely answered — stack API supports 1-to-2 with
   pre-empt/restore (§24.4); empirical probe still decides for the H3's specific build.
-- **New:** does the H3's `btstack.a` build include the 1拖2 code paths? Compare
-  `btstack.a` (SDK) vs the H3 app's stack region by function-pattern diff, or just run
-  `tools/bt_multipoint_probe.py`.
+- ~~Does the H3's `btstack.a` build include the 1拖2 code paths?~~ **Answered
+  2026-10-01 by hardware** ([§9B.6.1](22-bluetooth-7-multipoint-architecture.md)):
+  profile-level multipoint works (SPP+HFP concurrent over one ACL, PTT keys with both
+  up), but a second *physical* device evicts the first — the cap is the app's
+  single-active-device policy, not the stack build. Next: reverse-order 2-ACL test +
+  locate the eviction path.
 - **New:** H3 entry point is `0x1E00100` but the SDK default `CONFIG_ENTRY_ADDRESS` is
   `0x1E00120` — TIDRADIO overrode it (or an older SDK default). Cosmetic, but worth a
   version fingerprint across v44/v45/v50.

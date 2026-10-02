@@ -170,19 +170,30 @@ class Ptt:
         self.sock = sock
         self.down = False
 
+    def _send(self, payload):
+        # The radio can drop the link at any time (e.g. a second BT device
+        # joins and it evicts us); the first send after that raises ENOTCONN.
+        try:
+            self.sock.sendall(payload)
+            return True
+        except OSError:
+            log("!! SPP link is dead (radio disconnected) -- press q to exit !!")
+            return False
+
     def press(self):
-        self.sock.sendall(PRESS)
-        self.down = True
-        log(">> +SPP=P   PTT DOWN -- radio should be TRANSMITTING")
+        if self._send(PRESS):
+            self.down = True
+            log(">> +SPP=P   PTT DOWN -- radio should be TRANSMITTING")
 
     def release(self, double=True):
-        self.sock.sendall(RELEASE)
+        ok = self._send(RELEASE)
         # The genuine button sends the release twice; mirror that, since the
         # radio may rely on the repeat to recover a dropped packet.
         if double:
-            self.sock.sendall(RELEASE)
-        self.down = False
-        log(">> +SPP=R   PTT UP%s" % ("" if double else "   (single release)"))
+            ok = self._send(RELEASE) and ok
+        if ok:
+            self.down = False
+            log(">> +SPP=R   PTT UP%s" % ("" if double else "   (single release)"))
 
 
 def main():

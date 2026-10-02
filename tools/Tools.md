@@ -833,6 +833,13 @@ sudo python3 tools/bt_multipoint_probe.py <radio-mac> [--hold 2] [--ptt-hold 3] 
 
 Run on the Linux box with the radio paired (and preferably the only paired host).
 
+**Result 2026-10-01:** `MULTIPOINT OK` at profile level (SPP+HFP concurrent, PTT keys
+with both up, both orders) — but note both legs come from one host = one ACL link.
+The follow-up two-ACL test (real headset joining while `bt_spp_hold.py` holds SPP)
+showed **kick-on-connect**: the radio evicts the first device when a second physical
+device connects. The ceiling is the app's single-active-device policy, not the stack.
+Details: [§9B.6.1](../findings/22-bluetooth-7-multipoint-architecture.md).
+
 ---
 
 ## 7. Verification & regression suites

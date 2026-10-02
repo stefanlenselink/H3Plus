@@ -137,6 +137,31 @@ Until this runs on hardware, 9B.4 bounds the *app* layer but not the stack layer
 > The probe still decides what TIDRADIO's build enables — see
 > [Ch. 24 §24.4](24-jieli-ecosystem-sdk-toolchain.md#244-bt-stack--the-multipoint-answer-ch-22-open-question-b).
 
+#### 9B.6.1 Probe results — RUN on hardware 2026-10-01 (radio `0B:FF:59:E8:85:92`)
+
+Pairing note: the classic endpoint paired only after the KDE/BlueZ PIN popup was
+approved (silent `bluetoothctl pair` did not complete it).
+
+1. **Profile-level multipoint: OK.** `--ptt-hold 3` run: SPP ch2 + HFP ch6 connected
+   concurrently from the host (each in ~0.03 s), SPP survived the HFP join, `+SPP=P`
+   while both were up keyed the radio — which emitted `AT+MPTT=0` and
+   `\r\n+CIEV: 2,1\r\n` on the HFP leg — and both links stayed alive; reverse order
+   (HFP first, then SPP) also worked. Verdict line: `MULTIPOINT OK`.
+2. **Two-ACL multipoint: KICK-ON-CONNECT.** With `tools/bt_spp_hold.py` holding SPP
+   (host = button role), connecting a **real headset** to the radio killed the host's
+   SPP link (radio voice-announced connect/disconnect throughout). A second *physical*
+   device evicts the first.
+
+**Reading.** The two probe legs come from one host, so BlueZ multiplexes ch2+ch6 over a
+**single ACL** — i.e. one remote device with two profile connections, exactly what the
+single device struct (§9B.4) tolerates. The headset test adds the second ACL, and that
+is what the app evicts. So the ceiling is neither the link layer nor the profile layer:
+it is the **app's single-active-device policy**. Route A therefore has a concrete,
+narrow target — the eviction path taken when a new ACL connects (find it via the
+connection-callback ops table §9B.1 / dispatcher §9B.2 and the disconnect call it makes).
+The stretch goal (SPP button + HFP headset) needs no second audio device in the app
+model — only that the SPP link is not evicted.
+
 ### 9B.7 Code space: none inside the app — but ~208 KiB of erased flash beyond it
 
 > [!WARNING]
@@ -187,13 +212,18 @@ Two space results matter for any trampoline plan:
 
 ### 9B.9 Next steps
 
-1. **Run 9B.6 on hardware** (Linux box, paired radio) — the single most informative
-   outstanding experiment.
-2. Static: locate the stack-layer link policy — scan ROM-call wrappers in the
-   `0x0200xxxx`/`0x0211xxxx` range used by the connection paths for parameters like
-   max-ACL / role-switch flags; Ghidra (quarkslab/ghidra-jieli) makes this tractable.
-3. If multipoint OK: try the 9B.5 constant-routing-byte experiment (2–4 byte patch).
-4. If refused: Route C (SDK rebuild) becomes the only path; prioritize finding the
-   AC635N/BR23 SDK drop and confirming A2DP+HFP+SPP coexistence configs in it.
-5. Verify SFC mapping beyond `0xC8FE0` (Route B) — cheapest hardware test: a uboot
-   read already proved the *flash* is there; an execute test needs a scratch patch.
+1. ~~Run 9B.6 on hardware~~ ✅ **done 2026-10-01** (§9B.6.1): profile-level multipoint
+   OK; second physical device evicts the first.
+2. **Reverse 2-ACL test** (quick, hardware): headset connected first, then
+   `tools/bt_spp_hold.py` from the host — does the SPP connect get *refused*, or does it
+   *evict the headset*? Distinguishes "evict-old" from "refuse-new" admission, which
+   decides what the patch must change.
+3. **Static: locate the eviction path** — the new-ACL-connect handler reached via the
+   ops table (§9B.1)/dispatcher (§9B.2) and the disconnect call it makes on the existing
+   link; the official LLVM objdump (Ch. 24 §24.5) + `tools/xref.py`/`findva.py` are the
+   tools. Ghidra (quarkslab/ghidra-jieli) makes this tractable at scale.
+4. If the eviction is classifier-conditional, the 9B.5 constant-routing-byte experiment
+   (2–4 byte patch) may combine with disabling the kick.
+5. Route C (SDK rebuild with 1拖2) stays the fallback — the SDK is now on disk
+   (`fw-AC63_BT_SDK`, `cpu/br23`); Route B (erased flash) is **deprioritised** —
+   ch. 24 §24.6 showed the span is VM-reserved.

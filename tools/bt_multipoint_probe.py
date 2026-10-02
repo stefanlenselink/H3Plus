@@ -31,6 +31,17 @@ USAGE
     sudo python3 tools/bt_multipoint_probe.py AA:BB:CC:DD:EE:FF --ptt-hold 3
 
 The tool prints a VERDICT line at the end; capture the whole output.
+
+RESULTS (2026-10-01, radio 0B:FF:59:E8:85:92)
+---------------------------------------------
+Profile-level multipoint: OK -- SPP ch2 + HFP ch6 held concurrently, +SPP=P keyed
+the radio with both up, both directions worked. CAVEAT: both legs come from ONE
+host, so BlueZ carries them over a SINGLE ACL link (one remote device, two
+profiles) -- this leg never tested two devices.
+Two-ACL test (real headset joining while bt_spp_hold.py holds SPP): the radio
+EVICTED the host's SPP link => app-layer single-active-device policy
+(Findings.md 9B.4). The ceiling is the app's eviction path, not the stack.
+See Findings.md 9B.6.1.
 """
 # Copyright (c) 2026 Stefan Lenselink <Stefan@lenselink.org>
 #
@@ -191,10 +202,13 @@ def probe(mac, hold=2.0, ptt_hold=0.0, no_hfp=False):
     return result
 
 
-def verdict(r):
+def verdict(r, no_hfp=False):
     log("=== VERDICT ===")
     if not r["spp"]:
         log("INCONCLUSIVE - SPP never came up")
+        return
+    if no_hfp:
+        log("SPP-ONLY SMOKE PASS: ch2 connected and held (no HFP leg was run)")
         return
     if r["hfp_after_spp"] and r.get("spp_survives"):
         log("MULTIPOINT OK: radio holds SPP + HFP concurrently on separate")
@@ -224,7 +238,7 @@ def main():
                     help="SPP-only smoke run (no HFP leg)")
     args = ap.parse_args()
     r = probe(args.mac, args.hold, args.ptt_hold, args.no_hfp)
-    verdict(r)
+    verdict(r, args.no_hfp)
     return 0
 
 

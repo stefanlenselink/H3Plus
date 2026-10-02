@@ -186,9 +186,11 @@ Open (in priority order):
    nine menu languages (ch. 23 §9C.9 — stock never localises these labels; all 20 combos
    re-scan clean) and on the display (2026-10-01: `--PTT2=BT-PTT2 --OD-PTT=BT-PTT`
    shows "BT2"/"BT PTT" correctly). BT-PTT2 fully validated; nothing in ch. 23 untested.
-2. **Run `tools/bt_multipoint_probe.py <mac>` on Linux/hardware** — decides whether the
-   H3's stack build accepts two concurrent ACL links. The SDK stack API supports 1拖2
-   with call pre-empt/restore (ch. 24 §24.4); the probe settles the H3 build.
+2. ~~Run `tools/bt_multipoint_probe.py <mac>` on Linux/hardware~~ ✅ **RUN 2026-10-01**
+   (ch. 22 §9B.6.1): profile-level multipoint OK (SPP+HFP concurrent over one ACL, PTT
+   keys with both up); a second *physical* device (real headset) **evicts** the first —
+   the cap is the app's single-active-device policy, not the stack. Next: reverse-order
+   2-ACL test (refuse vs evict?) + static hunt for the eviction path (§9B.1/9B.2).
 3. Ghidra + quarkslab/ghidra-jieli (pi32v2, ELF machine 0xF1) on Linux; import
    `work/app_dec.bin` at `0x01E00000`. The official toolchain objdump (ch. 24 §24.5) is
    now the ground truth for decoding; Ghidra adds decompilation.
