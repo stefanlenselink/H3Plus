@@ -3,7 +3,7 @@
 > Index for the RE effort on the TIDRADIO (TID Electronics) H3 Plus handheld transceiver.
 > Status: **firmware fully decrypted** — UBOOT *and* app region. Chip + chip key confirmed from hardware.
 > BT headset-mic PTT **hardware-confirmed** via 3–5 byte patches.
-> Last updated: 2026-09-30 (added [Ch. 24 — The JieLi Ecosystem: Official SDK, Toolchain, Packagers, Community Tools](24-jieli-ecosystem-sdk-toolchain.md) — ufw table closed, disassembler validated by the official backend, stack-layer multipoint answered; **BT-PTT2 hardware-validated** — [Ch. 23](23-bluetooth-8-bt-ptt2.md) now confirmed on radio).
+> Last updated: 2026-10-03 (added [Ch. 25 — The Ghidra decompile ⇒ alter ⇒ compile route](25-ghidra-decompile-compile-route.md) — Ghidra 12 + ghidra-jieli decompiles the app, the official toolchain recompiles it, fixed-point proven; hardware "unchanged" test pending. Multipoint root cause closed in [Ch. 22 §9B.11](22-bluetooth-7-multipoint-architecture.md) — the stack tracks one BR/EDR link; earlier: [Ch. 24](24-jieli-ecosystem-sdk-toolchain.md) ecosystem sweep, **BT-PTT2 hardware-validated** — [Ch. 23](23-bluetooth-8-bt-ptt2.md)).
 
 > [!IMPORTANT]
 > **No firmware is published in this repository.** The folders `BIN/`, `FW/`, `Dumps/`
@@ -35,6 +35,7 @@ The companion document for tool details is [`../tools/Tools.md`](../tools/Tools.
 | [06-decrypted-bootloader.md](06-decrypted-bootloader.md) | What the decrypted bootloader (`0x0000–0x4FFF`) contains: upgrade strings, region markers, and the JieLi structures that pointed toward the app region. Explains how each string informed the next step. |
 | [07-app-region-solved.md](07-app-region-solved.md) | The solution to the app region: the SFC ENC hardware block scrambles per 32-byte cache line with `key = chipkey ^ (addr >> 2)`. Includes the decryptor, the base-0 proof, and the historical negative results so the dead ends are not re-walked. |
 | [24-jieli-ecosystem-sdk-toolchain.md](24-jieli-ecosystem-sdk-toolchain.md) | The external sweep: `fw-AC63_BT_SDK` **is** the right SDK (`cpu/br23` = AC635N), `isd_config.ini` fully decoded via its generator, SFCENC registers confirm the ch. 07 cipher at RTL level, the BT stack API proves **1-to-2 multipoint with call pre-empt** (app-layer, not stack, is the H3's limit), the official LLVM objdump **validates our disassembler (12,786 targets, 0 mismatches)**, the `.ufw` table is located, and the full flash map (incl. the VM-region caution for Route B). |
+| [25-ghidra-decompile-compile-route.md](25-ghidra-decompile-compile-route.md) | The Ghidra route: ghidra-jieli (unmodified) + Ghidra 12.1.4 decompile the app at `0x01E00000` (headless import recipe, pointer-scan seeding, 6558 functions); decompiles independently confirm `is_1t2_connection`, the conn_num setter and the routing classifier; JieLi clang (`-target pi32v2 -mcpu=r3 -Oz`) recompiles the decompiled logic to the **same instruction forms**, and the spliced image re-decompiles to **byte-identical C** (fixed point). Scope limits for multipoint stated. |
 
 ### Bluetooth headset / PTT effort (former §9A chapters, plus §9B multipoint)
 

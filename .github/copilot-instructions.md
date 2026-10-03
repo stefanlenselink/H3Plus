@@ -28,6 +28,7 @@ patch makes any BT headset's mic the PTT transmit source, hardware-confirmed.
 | `findings/22-bluetooth-7-multipoint-architecture.md` | §9B: dual-device/multipoint analysis |
 | `findings/23-bluetooth-8-bt-ptt2.md` | §9C: BT-PTT2 (BT mic on VFO B) — trampoline + code cave design, **hardware-confirmed 2026-09-30** |
 | `findings/24-jieli-ecosystem-sdk-toolchain.md` | §24: SDK/toolchain/packager ecosystem — ufw table, SFCENC registers, stack 1拖2 multipoint, official-objdump validation, flash map |
+| `findings/25-ghidra-decompile-compile-route.md` | §25: Ghidra 12 + ghidra-jieli decompile ⇒ compile route — headless import recipe, pointer-scan seeding, round-trip fixed-point proof, JieLi clang `-target pi32v2 -mcpu=r3 -Oz` |
 | `tools/Tools.md` | Reference for every script in `tools/` (§1 patcher, §3 crypto, §4 static analysis, §6 BT rig, §7 test suites) |
 | `tools/isa/pi32v2.md` | The pi32v2 instruction-set notes; `pi32dis.py` parses it at runtime |
 | `BIN/ FW/ Dumps/ work/` | User artifacts (firmware, dumps, scratch) — see `ARTIFACTS.md` |
@@ -212,9 +213,15 @@ Open (in priority order):
    stack cannot. Multipoint needs a vendor multipoint library, a machine-code data
    model transplant (research-grade), or a single-device workaround (one device
    carrying SPP+HFP, e.g. custom ESP32 combo device — profile coexistence proven).
-3. Ghidra + quarkslab/ghidra-jieli (pi32v2, ELF machine 0xF1) on Linux; import
-   `work/app_dec.bin` at `0x01E00000`. The official toolchain objdump (ch. 24 §24.5) is
-   now the ground truth for decoding; Ghidra adds decompilation.
+3. ~~Ghidra + quarkslab/ghidra-jieli on Linux~~ ✅ **STOOD UP 2026-10-03** (ch. 25):
+   Ghidra 12.1.4 + ghidra-jieli (unmodified) decompiles `work/app_dec.bin` at
+   `0x01E00000` headless (`tools/ghidra/` import recipe + pointer-scan seeding,
+   6558 functions); decompiles confirm `is_1t2_connection`/conn_num setter/
+   classifier; JieLi clang (`-target pi32v2 -mcpu=r3 -Oz`) recompiles the
+   decompiled logic to the same instruction forms, splices, and re-decompiles
+   to byte-identical C (fixed point). Hardware "unchanged" test image
+   `work/roundtrip/rt_test.bin` **UNTESTED**. Next: find the eviction decision
+   site with the decompiler.
 4. ~~AC635N/BR23 JieLi SDK acquisition~~ ✅ `fw-AC63_BT_SDK` `cpu/br23` (ch. 24 §24.1);
    next: feasibility build of `apps/spp_and_le` for br23 with the Linux toolchain
    (`-mcpu=r3`, `ulimit -n 8192`).

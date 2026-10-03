@@ -63,6 +63,8 @@ All paths below are relative to the repo root.
 7. [Verification & regression suites](#7-verification--regression-suites)
    - [`verify_cli.py`](#71-verify_clipy) · [`verify_actions.py`](#72-verify_actionspy)
 8. [Typical workflows](#8-typical-workflows)
+9. [Ghidra pi32v2 decompile ⇒ compile route](#9-ghidra-pi32v2-decompile--compile-route)
+   - [`ghidra/MoveBlock.java`](#91-ghidramoveblockjava) · [`ghidra/SeedFunctions.java`](#92-ghidraseedfunctionsjava) · [`ghidra/DumpDecompiled.java`](#93-ghidradumpdecompiledjava) · [`ghidra/rt_is1t2.c` + `ghidra/splice_rt.py`](#94-round-trip-example)
 
 ---
 
@@ -940,3 +942,66 @@ sudo ./tools/bt_be_headset.sh "TID-MIC-EAR"        # PC becomes the headset; rad
 ./tools/bt_audio_check.sh <radio-mac>              # (separate shell, non-root) audio sanity
 sudo python3 tools/bt_spp_hold.py <radio-mac>      # hold SPP, interactive PTT
 ```
+
+---
+
+## 9. Ghidra pi32v2 decompile ⇒ compile route
+
+Ghidra ≥ 11 with the [ghidra-jieli](https://github.com/quarkslab/ghidra-jieli)
+processor module (SLEIGH, language `pi32v2:LE:32:default`) decompiles the
+decrypted app; the JieLi LLVM toolchain recompiles the result. Verified
+end-to-end 2026-10-03 — findings [ch. 25](../findings/25-ghidra-decompile-compile-route.md).
+
+**Install (one-time):** copy the module into the Ghidra tree — Ghidra loads it
+as a processor module with no build step (the shipped `pi32v2.sla` works
+unchanged on Ghidra 12.1.4 / Java 25):
+
+```bash
+cp -r ../ghidra-jieli ../ghidra_12.1.4_PUBLIC/Ghidra/Processors/JieLi
+```
+
+### 9.1 `ghidra/MoveBlock.java`
+
+Headless `BinaryLoader` ignores `-loader-"Base Address"` (Ghidra 12 prints
+*“Skipping unsupported …”* and loads at 0). Import raw, then this pre-script
+moves the block to **VA 0x01E00000** (= app offset 0).
+
+### 9.2 `ghidra/SeedFunctions.java`
+
+A raw import has no entry points, so auto-analysis finds nothing. This
+pre-script does the `findva.py` trick inside Ghidra: every 2-byte-aligned LE
+word pointing back into `[0x01E00000, 0x01EC4000)` gets a function (≈6.5 k),
+plus the well-known BT seeds. Standard analyzers propagate afterwards; the
+whole 784 KiB app imports + analyzes in ~2 minutes.
+
+### 9.3 `ghidra/DumpDecompiled.java`
+
+Post-script: `DumpDecompiled.java <outDir> [addr …]` writes one `.c` per
+function (defaults to the BT-research set).
+
+Full import recipe (from the repo root):
+
+```bash
+../ghidra_12.1.4_PUBLIC/support/analyzeHeadless work/ghidra_proj h3plus \
+    -import work/app_dec.bin -processor pi32v2:LE:32:default -cspec default \
+    -scriptPath tools/ghidra -preScript MoveBlock.java -preScript SeedFunctions.java \
+    -postScript DumpDecompiled.java work/ghidra_out
+```
+
+### 9.4 Round-trip example
+
+`ghidra/rt_is1t2.c` re-implements the two decompiled one-liners
+(`is_1t2_connection` @`0x01E1787C`, `set_conn_num` @`0x01E182B0`). Build and
+splice into a **decrypted-app-free** full image:
+
+```bash
+TC=../jieli-linux-toolchains-20250324.1/pi32v2/bin
+$TC/clang -target pi32v2 -mcpu=r3 -Oz -c tools/ghidra/rt_is1t2.c -o work/roundtrip/rt_is1t2.o
+$TC/objcopy -O binary -j .text work/roundtrip/rt_is1t2.o work/roundtrip/rt_is1t2.bin
+python3 tools/ghidra/splice_rt.py <in.bin> <out.bin> work/roundtrip/rt_is1t2.bin
+```
+
+`splice_rt.py` context-checks both sites (stock bytes), splices, re-encrypts
+(via `jl_sfcenc`), and verifies the crypto round-trip. The spliced image
+re-decompiles to **byte-identical C** (fixed point, §25.5). Regenerate the
+blob from the `.c` rather than committing binaries.
