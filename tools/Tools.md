@@ -134,7 +134,8 @@ python tools/patch_h3plus_firmware_bluetooth.py <src> [dst] [options]
 | `--PTT=ACTION` | What the radio's **main PTT key** does. **Default `BT-PTT`** (hardware-confirmed). `PTT` = stock (transmit on the current VFO, no patch); `BT-PTT` = transmit the Bluetooth headset's mic while one is linked, the radio's own mic otherwise. `PTT2` / `OD-PTT` / `BT-PTT2` are **not possible** for the main PTT key (the PF-menu executor is not reachable from it) and are refused. |
 | `--PTT2=ACTION` | What the PF menu option **"PTT2"** does on every PF key assigned to it. **Default `PTT2`** (stock: TX forced to VFO B). Any of the five actions (`PTT`, `PTT2`, `BT-PTT`, `BT-PTT2`, `OD-PTT`) works as long as `--OD-PTT` differs from it. |
 | `--OD-PTT=ACTION` | What the PF menu option **"OD PTT"** does. **Default `OD-PTT`** (stock: one-key duplex). Any of the five actions works as long as `--PTT2` differs from it. |
-| `--only=NAME` | Apply only this internal patch (repeatable; expert / inspection). Names: `duplex`, `ptt` (known-bad), `pttdown`, `pttup`, `pf1down`, `pf1up`, `pf2down`, `pf2up` (legacy scanner literals), `pfbody7`, `pfbody8`, `pfrelease`, `pftable`, `pfhandler`, `pfcave`, `pflabels`. Default set is `duplex` plus the key patches implied by the action options. When `--only` is given, the default `--PTT=BT-PTT` is **not** added unless `--PTT` is also given explicitly. |
+| `--conn-num=1\|2` | **EXPERIMENTAL / UNTESTED.** Rewrite the stack's `user_ctrl_conn_num` init (`r1 \|= 16` → `\|= 32` at VA `0x01E182DC`, one byte) — the 2-bit "how many BT connections may be active" gate ([§9B.10.2](../findings/22-bluetooth-7-multipoint-architecture.md#9b102-gate-fully-located--the---conn-num-one-byte-patch-2026-10-02-untested)). `1` = stock single-device; `2` = ask the stack for multipoint (headset + TID-PTT button). Default: site untouched (but `--show` reports both states). |
+| `--only=NAME` | Apply only this internal patch (repeatable; expert / inspection). Names: `duplex`, `ptt` (known-bad), `pttdown`, `pttup`, `pf1down`, `pf1up`, `pf2down`, `pf2up` (legacy scanner literals), `pfbody7`, `pfbody8`, `pfrelease`, `pftable`, `pfhandler`, `pfcave`, `pflabels`, `connum`. Default set is `duplex` plus the key patches implied by the action options. When `--only` is given, the default `--PTT=BT-PTT` is **not** added unless `--PTT` is also given explicitly. |
 | `--sectors=PREFIX` | Also export each changed 4 KiB flash sector as `PREFIX_<addr>.bin`, and print the exact `jl-uboot-tool` `erase` / `write` / `read … verify` commands. **Raw `.bin` / full dump only** — on a `.fw` container offsets ≠ flash addresses, and the tool refuses. |
 
 Option **names** and **action values** are matched case-insensitively (`--ptt=bt-ptt`
@@ -217,6 +218,11 @@ python tools/patch_h3plus_firmware_bluetooth.py Dumps/dump_internal.bin out.bin 
 
 # another routing mode (any of --bluetooth-mode / --bt / -b)
 python tools/patch_h3plus_firmware_bluetooth.py Dumps/dump_internal.bin out.bin --bt 2
+
+# EXPERIMENTAL (UNTESTED): ask the BT stack for two concurrent connections —
+# the user_ctrl_conn_num gate (§9B.10.2); combine with the normal actions
+python tools/patch_h3plus_firmware_bluetooth.py Dumps/dump_internal.bin out.bin \
+    --PTT=BT-PTT --PTT2=BT-PTT2 --OD-PTT=PTT --conn-num=2
 
 # minimal in-place flashing: export just the changed 4 KiB sectors + flash commands
 python tools/patch_h3plus_firmware_bluetooth.py BIN/TD-H3-PlusV1.0.50.bin --sectors=work/sect

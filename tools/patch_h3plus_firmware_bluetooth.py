@@ -835,6 +835,28 @@ PF_TBB_78_VA = 0x01E75DE2
 PF_TBB_78_NATIVE = bytes.fromhex("2e33")
 PF_TBB_78_SWAPPED = bytes.fromhex("332e")
 
+# --------------------------------------------------------------------------
+# --conn-num: stack connection-count gate (multipoint experiment, ch. 22
+# SS9B.10). The app's BT init (0x01E60EB0) calls __set_user_ctrl_conn_num(1)
+# at 0x01E182B0: a read-modify-write of the flag word at RAM 0xBF39
+# (user_stack_configs + 0x15) that clears bits 4-5 and then runs `r1 |= 16`
+# at 0x01E182DC, i.e. conn_num = 1. The JieLi API (avctp_user.h) documents
+# it as "number of BT connections supported; controls discoverability and
+# the reconnect flow". `r1 |= 32` (byte 0x25) asks for conn_num = 2.
+# UNTESTED on hardware: the stack may then hold two ACL links (headset HFP
+# + TID-PTT SPP), while the app still models ONE remote device (RAM 0x102F0)
+# -- expect last-connected-wins for audio/mic routing.
+# --------------------------------------------------------------------------
+CONN_NUM_VA = 0x01E182DC
+CONN_NUM_CTX_VA = 0x01E182CC
+CONN_NUM_CTX = bytes.fromhex(
+    "71 e1 30 40 92 b8 8a 43 92 b0 8a 42 92 a8 8a 41 31 24")
+CONN_NUM_STATES = {"1": bytes.fromhex("3124"), "2": bytes.fromhex("3125")}
+CONN_NUM_LABELS = {
+    "1": "conn_num = 1 (stock: single BT device)",
+    "2": "conn_num = 2 (multipoint: two BT devices, UNTESTED)",
+}
+
 # Kept for tools/verify_actions.py: the native body addresses.
 ODPTT_PRESS_VA = PF_BODY8_VA
 ODPTT_RELEASE_VA = REL_OD_BODY_VA
@@ -1071,13 +1093,16 @@ def _ctx_variant_fn(va, ctx_va, ctx_base):
     return variant
 
 
-def build_patches(duplex_mode=4, ptt2_action="PTT2", odptt_action="OD-PTT"):
+def build_patches(duplex_mode=4, ptt2_action="PTT2", odptt_action="OD-PTT",
+                  conn_num=None):
     """Return the patch table, with the `duplex` patch's target selected by
     `duplex_mode` (see DUPLEX_LABELS) and the `pflabels` multi-patch built
     for the (--PTT2, --OD-PTT) action pair (see PF_COMBO_PATCHES). The
     other label variants stay in PF_LABEL_VARIANTS, detection-only, so an
     image patched with a different combination is still recognised. The
-    stock pair has no label patch at all."""
+    stock pair has no label patch at all. `conn_num` (1 or 2) selects the
+    target of the experimental stack connection-count gate (see CONN_NUM_VA);
+    the patch entry is always present so --show recognises both states."""
     if duplex_mode not in DUPLEX_STATES:
         raise SystemExit("--bluetooth-mode must be one of %s" % sorted(DUPLEX_STATES))
     validate_pf_combo(ptt2_action, odptt_action)
@@ -1104,6 +1129,20 @@ def build_patches(duplex_mode=4, ptt2_action="PTT2", odptt_action="OD-PTT"):
             "ctx_base": PTT_CTX_BASE,
             "ctx_variant": _ctx_variant_fn(KEY_EVENT_CALL_VA, PTT_CTX_VA, PTT_CTX_BASE),
         },
+    }
+    cn = str(conn_num) if conn_num is not None else "1"
+    patches["connum"] = {
+        "desc": "stack connection-count gate __set_user_ctrl_conn_num(1) -> %s"
+                % cn,
+        "va": CONN_NUM_VA,
+        "new": CONN_NUM_STATES[cn],
+        "states": CONN_NUM_STATES,
+        "labels": CONN_NUM_LABELS,
+        "target": cn,
+        "ctx_va": CONN_NUM_CTX_VA,
+        "ctx_base": CONN_NUM_CTX,
+        "ctx_variant": _ctx_variant_fn(CONN_NUM_VA, CONN_NUM_CTX_VA,
+                                       CONN_NUM_CTX),
     }
     for name, (va, ctx_va, ctx_hex, native, spp, what) in KEYCODE_PATCHES.items():
         states = {"native": bytes([0x48, native]), "spp": bytes([0x48, spp])}
@@ -1656,6 +1695,21 @@ def main():
         "actions is supported, in either order:\n" + _PAIR_HELP,
     )
     ap.add_argument(
+        "--conn-num",
+        dest="conn_num",
+        type=int,
+        choices=(1, 2),
+        default=None,
+        help="EXPERIMENTAL (UNTESTED on hardware): number of Bluetooth "
+        "connections the stack maintains. Stock is 1: a second device that "
+        "connects EVICTS the first (hardware-confirmed, ch. 22 SS9B.6.1). "
+        "2 rewrites the app's __set_user_ctrl_conn_num(1) init override to "
+        "(2), asking the stack to hold two ACL links at once - e.g. a "
+        "headset (HFP) plus a TID-PTT button (SPP). The app still tracks "
+        "ONE remote device (RAM 0x102F0), so expect last-connected-wins "
+        "for audio and mic routing. Findings ch. 22 SS9B.10.",
+    )
+    ap.add_argument(
         "--sectors",
         metavar="PREFIX",
         help="also export the changed 4 KiB flash sectors as PREFIX_<addr>.bin "
@@ -1677,7 +1731,7 @@ def main():
         )
     validate_pf_combo(a7, a8)
 
-    PATCHES = build_patches(args.bluetooth_mode, a7, a8)
+    PATCHES = build_patches(args.bluetooth_mode, a7, a8, args.conn_num)
 
     raw, app, app_start = load_app(args.src)
     print("source: %s (%d bytes)" % (args.src, len(raw)))
@@ -1685,8 +1739,10 @@ def main():
         "app region: container 0x%X-0x%X, flash 0x%X, chipkey 0x%04X\n"
         % (app_start, app_start + APP_LEN, FLASH_BASE, CHIPKEY)
     )
-    print("configuration: --bluetooth-mode %d --PTT=%s --PTT2=%s --OD-PTT=%s\n"
-          % (args.bluetooth_mode, ptt_action, a7, a8))
+    print("configuration: --bluetooth-mode %d --PTT=%s --PTT2=%s --OD-PTT=%s%s\n"
+          % (args.bluetooth_mode, ptt_action, a7, a8,
+             "" if args.conn_num is None
+             else " --conn-num=%d (EXPERIMENTAL)" % args.conn_num))
 
     if args.show or not (args.dst or args.sectors):
         show(app)
@@ -1705,6 +1761,8 @@ def main():
         wanted = list(DEFAULT_PATCHES)
         wanted += PTT_KEY_PATCHES[ptt_action]
         wanted += pf_combo_patches(a7, a8)
+    if args.conn_num is not None:
+        wanted += ["connum"]
     wanted = list(dict.fromkeys(wanted))
     if ({"pfbody7", "pfbody8", "pfrelease", "pflabels"} & set(wanted)
             and PF_LITERAL_PATCHES & set(wanted)):

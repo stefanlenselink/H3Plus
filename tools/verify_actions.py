@@ -278,6 +278,31 @@ cp = run(sw, os.path.join(OUTDIR, "v_swap_out.bin"),
 ck(cp.returncode != 0 and "obsolete swap model" in cp.stdout + cp.stderr,
    "refuse image with swapped tbb table")
 
+# --- --conn-num (EXPERIMENTAL multipoint gate, ch.22 §9B.10.1) --------------
+cn = os.path.join(OUTDIR, "v_connum2.bin")
+cp = run(SRC, cn, "--only", "connum", "--conn-num=2")
+ck(cp.returncode == 0, "--conn-num=2 build")
+if cp.returncode == 0:
+    a = dec(cn)
+    ck(g(a, P.CONN_NUM_VA, 2) == b"\x31\x25", "connum byte -> 31 25")
+    d = [i for i in range(len(stock)) if stock[i] != a[i]]
+    ck(d == [P.va_to_off(P.CONN_NUM_VA) + 1],
+       "connum patch touches exactly one byte (%s)" % [hex(x) for x in d])
+    cp = run(cn, "--show")
+    cnline = [l for l in cp.stdout.splitlines() if l.startswith("connum")]
+    ck(cp.returncode == 0 and "UNKNOWN" not in cp.stdout
+       and len(cnline) == 1 and "current" in cnline[0],
+       "--show on patched connum clean")
+    cp2 = run(cn, cn + ".2", "--only", "connum", "--conn-num=2")
+    ck(cp2.returncode == 0 and "Nothing to do" in cp2.stdout,
+       "connum idempotent")
+    cp3 = run(cn, os.path.join(OUTDIR, "v_connum1.bin"),
+              "--only", "connum", "--conn-num=1")
+    ck(cp3.returncode == 0 and dec(os.path.join(OUTDIR, "v_connum1.bin"))
+       [P.va_to_off(P.CONN_NUM_VA) + 1] == 0x24, "conn-num=1 reverts")
+cp = run(SRC, os.path.join(OUTDIR, "v_no.bin"), "--conn-num=3")
+ck(cp.returncode != 0, "refuse --conn-num=3")
+
 # --- cleanup ----------------------------------------------------------------
 if not fail and not KEEP:
     shutil.rmtree(OUTDIR)

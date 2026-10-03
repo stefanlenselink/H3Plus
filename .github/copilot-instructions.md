@@ -86,6 +86,7 @@ python tools/patch_h3plus_firmware_bluetooth.py <src> [<dst>] [--show]
     [--bluetooth-mode|--bt|-b 1-6]   # default 4 (duplex, HW-confirmed)
     [--PTT=BT-PTT|PTT] [--PTT2=...] [--OD-PTT=...]   # 20 action pairs build directly
     #   actions: PTT PTT2 BT-PTT BT-PTT2 OD-PTT (BT-PTT2 = BT mic forced to VFO B, HW-confirmed)
+    [--conn-num=1|2]   # user_ctrl_conn_num gate, 1 byte; HW-tested insufficient (ch.22 §9B.10.2/§9B.11)
     [--sectors=PREFIX] [--only SITE]
 ```
 
@@ -169,7 +170,7 @@ scripts here, and none should be added.
   Flashing is the user's action; print the exact `jl-uboot-tool` commands instead
   (`--sectors` route preferred; always `read` back and compare after `write`).
 
-## Current state & open frontiers (as of 2026-09-30)
+## Current state & open frontiers (as of 2026-10-02)
 
 Done: both ciphers broken · classifier decoded · routing modes 1–6 mapped · key-remap
 patches HW-confirmed (BT-mic PTT, duplex) · patch tool + 2 test suites green ·
@@ -177,7 +178,11 @@ multipoint architecture mapped (ch. 22) · **BT-PTT2 hardware-confirmed** (ch. 2
 `--PTT=BT-PTT --PTT2=BT-PTT2 --OD-PTT=PTT` works with and without a headset; normal
 PTT unaffected, no `gp+0xC7` flag leak) · **ecosystem sweep: right SDK found (`fw-AC63_BT_SDK`
 `cpu/br23` = AC635N), `.ufw` table located, official objdump validated our disassembler
-(12,786 targets, 0 mismatches), stack API proves 1-to-2 multipoint** (ch. 24).
+(12,786 targets, 0 mismatches), stack API proves 1-to-2 multipoint** (ch. 24) ·
+**multipoint gate `user_ctrl_conn_num` located + `--conn-num=2` patch built**
+(ch. 22 §9B.10.2) — **hardware-tested 2026-10-03: eviction persists; the real cap is
+the stack's `[1 x conn_info]` data model, multipoint is NOT reachable by binary
+patch** (ch. 22 §9B.11).
 
 Open (in priority order):
 1. ~~Hardware-validate BT-PTT2~~ ✅ **PASSED 2026-09-30** (ch. 23 §9C.8): flashed
@@ -192,11 +197,21 @@ Open (in priority order):
    the cap is the app's single-active-device policy, not the stack. Reverse 2-ACL test
    done 2026-10-02: `EHOSTDOWN` — radio not connectable while connected (page-level
    refuse). Policy = one active device; radio-initiated joins evict; incoming refused.
-   Gate found in SDK bitcode (ch. 22 §9B.10): `user_ctrl_conn_num` 2-bit field
-   (old-gen AC630N layout: `_stack_config` byte 14 bits 4–5, §9B.10.1). Candidate
-   initialiser blob @`0x01EC2064` (alignment unproven); setter not byte/shape-matched;
-   RAM `0xC54C` ruled out (LE adv config). Next: find `.bt_stack_data` copy loop /
-   Ghidra, check RMWs @`0x01E182CC`/`0x01E038E4`, then test gate=2.
+   Gate found in SDK bitcode (ch. 22 §9B.10) and **fully located in our image
+   2026-10-02** (ch. 22 §9B.10.2): `user_ctrl_conn_num` = RAM `0xBF39` bits 4–5
+   (`_stack_config` base `0xBF24`; blob @`0x01EC2064` +21 = `0x11`, alignment now
+   proven); inlined setter `__set_user_ctrl_conn_num(1)` @`0x01E182B0` (single caller
+   `0x01E60EB0`); reader @`0x01E1787C`. One-byte patch (`0x24→0x25` @file `0x182DD`)
+   shipped as `--conn-num=2`. **HW TEST 2026-10-03: FAILED — eviction persists both
+   directions** (byte verified `31 25` in the written image). Root cause found
+   (ch. 22 §9B.11): reader `0x01E1787C` is `is_1t2_connection()` (scan-management
+   only); the 1拖2 core `multi_bd.c` compiles to ZERO functions in every br23 SDK
+   build; and `user_info_t` embeds `[1 x conn_info]` in ALL public btstack.a builds
+   (bd29/br23/br25/br30/bd19/br34) — the host stack tracks ONE BR/EDR link. The
+   controller (bredr_table, `[4 x ...]` arrays) could do more; the precompiled host
+   stack cannot. Multipoint needs a vendor multipoint library, a machine-code data
+   model transplant (research-grade), or a single-device workaround (one device
+   carrying SPP+HFP, e.g. custom ESP32 combo device — profile coexistence proven).
 3. Ghidra + quarkslab/ghidra-jieli (pi32v2, ELF machine 0xF1) on Linux; import
    `work/app_dec.bin` at `0x01E00000`. The official toolchain objdump (ch. 24 §24.5) is
    now the ground truth for decoding; Ghidra adds decompilation.

@@ -232,12 +232,10 @@ Two space results matter for any trampoline plan:
    evict-old (radio-initiated joins). Optional sanity checks: while the headset is up,
    does the radio still appear in `bluetoothctl scan on` (inquiry scan), and does
    `bt_spp_hold.py` work again immediately after the headset disconnects?
-3. **Static: locate the eviction path** — largely reframed by §9B.10: the cap is the
-   `user_ctrl_conn_num` 2-bit gate (our struct at `0x01EC2064`, flag byte offset 21)
-   enforced by the stack. Remaining: find the init call `__set_user_ctrl_conn_num(1)`
-   and the enforcement reads in our older-generation build (Ghidra on the
-   `.bt_stack_code` region; start from what reads byte 21 of the RAM copy), then test
-   gate=2.
+3. ~~**Static: locate the eviction path**~~ ✅ **done 2026-10-02** — the cap is the
+   `user_ctrl_conn_num` 2-bit gate; the init setter, its caller, and the enforcement
+   reader are all located in §9B.10.2, and `--conn-num=2` builds a one-byte test
+   patch. Hardware test pending.
 4. If the eviction is classifier-conditional, the 9B.5 constant-routing-byte experiment
    (2–4 byte patch) may combine with disabling the kick.
 5. Route C (SDK rebuild with 1拖2) stays the fallback — the SDK is now on disk
@@ -354,6 +352,9 @@ Field 8 is the stack's central feature-flag word. Its other setters are
 setter, its init call, and the RAM copy of `_stack_config` are **not yet located**.
 Byte and shape matching has run out. Next options:
 
+> **Resolved 2026-10-02 in §9B.10.2** — options 1 and 4 below are exactly where it
+> was found; the text above is kept as the working record.
+
 1. Check the two uninvestigated bits-4–5 := 1 RMWs (`0x01E182CC`, `0x01E038E4`).
    A conn_num init writes exactly that value.
 2. Rerun the old-gen object scan correctly, so the *enforcement* reader
@@ -368,3 +369,144 @@ Experiment once located: set the gate to 2 (init-call argument or the
 flash-initialised byte) and rerun §9B.6.1. The stack may then hold two ACLs natively
 (1拖2). This is **untested**, and the page-scan-off in the app's connect handler
 would still have to be addressed for incoming joins.
+
+#### 9B.10.2 Gate fully located — the `--conn-num` one-byte patch (2026-10-02, UNTESTED)
+
+Resuming with the **official objdump as ground truth** (rebuild `/tmp/full.elf` per
+ch. 24 §24.5). Our linear sweep `work/full.lst` **drifts around
+`0x01E17xxx`–`0x01E18xxx`** — it mis-decoded the key instruction below as `|= 0x24`
+and emits garbage `.word` lines there. Do not trust it in this cluster.
+
+**Option 1 of §9B.10.1 was the hit: `0x01E182B0` is the setter.** The RMW at
+`0x01E182CC` sits inside a small leaf function — the compiled form of
+`__set_user_ctrl_conn_num(1)` with the argument **inlined** (the function takes no
+parameters):
+
+```
+1e182b0:  [--sp] = {rets, r4}
+1e182b2:   r0 = 0xBF39
+1e182b8:   r1 = b[r0+3] (u) … r4 = b[r0+0] (u)      ; word @ RAM 0xBF39
+1e182cc:   r1 = r4 & 0xFFFFFFCF                     ; clear conn_num bits 4-5
+1e182d0:   b[r0+3] = r1>>24; b[r0+2] = r1>>16; b[r0+1] = r1>>8
+1e182dc:   r1 |= 16                                 ; conn_num = 1   <-- PATCH SITE
+1e182de:   b[r0+0] = r1
+1e182e0:   rts
+```
+
+Consequences:
+
+- **RAM base of `_stack_config` = `0xBF24`**; the flag byte is `0xBF39` = base + 21.
+  This **proves the +21 alignment** that §9B.10 left unproven: the blob at
+  `0x01EC2064` carries `0x11` at +21 (`auto_conn_device_num = 1`,
+  `user_ctrl_conn_num = 1`), and the init code above re-asserts `1` regardless.
+- **Single caller: `0x01E60EB0`**, inside the app BT-init sequence that calls the
+  whole `__set_*` setter family (`0x01E182E2`, `0x01E18310`, `0x01E18340`,
+  `0x01E18376` — the last stores `h[0xBF24+4] = 8000` etc., matching the 2025 IR's
+  `page_timeout`/`super_timeout` setters). The H3 hard-codes `1` exactly like the
+  2025 SDK demos, not `TCFG_BD_NUM` like the old gen.
+- **pi32v2 `rN |= imm` encoding**: bytes `3N (0x20 | log2(imm))` —
+  `0x22`=|4, `0x23`=|8, `0x24`=|16, `0x25`=|32, `0x26`=|64. So conn_num 1→2 is a
+  **single byte, `0x24 → 0x25`, at VA `0x01E182DC`** (file `0x182DD`,
+  flash `0x1D2DD`). Verified against the official objdump listing.
+
+**Enforcement reader found too.** `0x01E1787C`:
+
+```
+r2 = uextra(word @ 0xBF39, p:4, l:2)   ; user_ctrl_conn_num
+r1 = h[0x1A662] & 7
+return r1 == r2                        ; "all configured devices connected?"
+```
+
+Six call sites — `0x01E17A26`, `0x01E21BC4`, `0x01E21E58`, `0x01E21F7E`,
+`0x01E21FA6`, `0x01E60CB0` — app state-machine gates. The eviction itself lives in
+the precompiled stack; whether it honours `conn_num = 2` is exactly what the
+hardware test below decides.
+
+**Tool support.** `tools/patch_h3plus_firmware_bluetooth.py` gained
+`--conn-num=1|2` (EXPERIMENTAL): site `connum`, context-guarded, one byte.
+`--show` recognises both states, `--conn-num=1` reverts. `tools/verify_actions.py`
+grew seven connum cases (build, exactly-one-byte diff, `--show` clean, idempotent,
+revert, refuse `--conn-num=3`). Both suites: **0 failures**.
+
+**Hardware test — UNTESTED.** Build and flash (see `ARTIFACTS.md` §4 for the
+`--sectors` route and read-back discipline):
+
+```bash
+python tools/patch_h3plus_firmware_bluetooth.py BIN/<stock>.bin work/cn2.bin \
+    --PTT=BT-PTT --PTT2=BT-PTT2 --OD-PTT=PTT --conn-num=2
+```
+
+Plan: connect the TID-PTT button (SPP), then the headset (HFP); check both stay up
+(no eviction), PTT still works, and which mic is live (last-connected-wins is an
+acceptable outcome). If eviction persists, the cap is app-level, not the stack
+gate: next targets are the connection-completion path in the app and the
+`multi_bd_deal_handle` registration (§9B.1/§9B.2).
+
+**Hardware test — RUN 2026-10-03: conn_num=2 does NOT lift the cap.** Flashed
+`Dumps/dump_internal.bin --PTT=BT-PTT --PTT2=BT-PTT2 --OD-PTT=PTT --conn-num=2`
+(site byte `31 25` verified in the written image). Behaviour unchanged, both
+directions: headset paired+connected first, then the TID-PTT joins → *"Bluetooth
+disconnected"* over radio **and** headset speaker (incumbent evicted); reverse
+order (PTT up, then connect headset from the menu) → the PTT loses its link the
+moment the headset connect starts. So `user_ctrl_conn_num` is **not** the (only)
+enforcement point — the real cap lives elsewhere: the app's single-device model
+(§9B.4, struct `0x102F0`) and/or a stack build compiled for one ACL link. The
+gate patch stays available (`--conn-num`) as one necessary-but-insufficient piece.
+
+## §9B.11 — The real cap: the stack's connection data model is `[1 x conn_info]`
+
+*2026-10-03, static analysis of the SDK precompiled libraries (bitcode version 53,
+disassembled with `llvm-dis-8` — the bundled JieLi clang 4.0.1 refuses the newer
+bitcode; `llvm-dis-8` reads it fine).*
+
+After the conn_num=2 hardware test failed (§9B.10.2), the enforcement was chased
+through the precompiled `btstack.a` libraries shipped in both SDKs:
+
+1. **`is_1t2_connection()` identified.** Old-gen `avctp_user.c` IR:
+   `is_1t2_connection() = ((__user_info.field9 & 7) == (stack_configs_app.field8 >> 4 & 3))`
+   — i.e. *connected count == conn_num*. This is byte-for-byte our reader
+   `0x01E1787C` (`h[0x1A662] & 7`, `uextra(p:4,l:2)` of the flag word). So
+   `user_ctrl_conn_num` is the **"max reached" threshold used for scan/connectability
+   management** — exactly the `app_keyboard.c` pattern:
+   `if (is_1t2_connection()) {scan off, conn off} else if (count==1) {conn on}`.
+   Our image has exactly **6** call sites: 4 in `user_operation_control` (the
+   `USER_CTRL` command switch at `0x01E21AF8`, `r14 = __user_info = 0x1A520`;
+   field9 = `h[r14+322]` ✓), 1 in `user_send_cmd_prepare` (`0x01E17A26`), 1 in the
+   app (`0x01E60CB0`). None of them rejects or evicts a link.
+
+2. **The 1拖2 core (`multi_bd.c`) is absent from our build.** Old-gen bd29
+   `multi_bd.o` carries real code (`multi_bd_init` registers `multi_bd_deal` into
+   `user_interface_handler.multi_bd_deal_handle` = ops-table field 9 = RAM
+   `0xBF48+0x24`; `multi_bd_deal` handles SCO steal/reject per the `hfp_switch`
+   bit). In the **br23** library `multi_bd.c.o` is 1532 B with **zero functions** —
+   compiled out. Consistent with our image: no extra `is_1t2_connection` callers,
+   and the ops-table slot `+0x24` is never written. The HCI Connection-Request path
+   (`hci_event_handler` case 4) calls `update_multi_bd_status(mac,1,type)` → NULL
+   handler → falls through to plain accept/reject.
+
+3. **The hard cap: `struct user_info_t` embeds `[1 x conn_info]`.** In *every*
+   public SDK library build — bd29, br23, br25, br30, bd19, br34 — the host stack's
+   global `__user_info` tracks exactly **one** BR/EDR connection
+   (`{user_cmd_ctrl, run_loop, [1 x conn_info], ...}`). The stack's command path,
+   `get_conn_for_addr()`, channel-state bits (`field9`: count=bits 0–2, slot=3–5)
+   and every profile glue assume one ACL. A second physical device overwrites/evicts
+   the incumbent — exactly what the hardware test showed, in both directions.
+
+4. **The controller is NOT the limit.** br23 `btctrler.a` `bredr_link.c`
+   `struct.bredr_table` contains `[4 x [80 x i8]]` / `[4 x ctrl_frame]` arrays —
+   the baseband is built for up to 4 BR/EDR links. The single-device ceiling is
+   entirely in the precompiled **host stack** (and mirrored in the app's own
+   single-device struct `0x102F0`, §9B.4).
+
+**Verdict: multipoint is not reachable by binary patching.** Flipping conn_num only
+moves the scan-management threshold; the connection table itself is one entry deep
+inside vendor-compiled code, with hundreds of call sites (`get_conn_for_addr`,
+`updata_profile_channels_status`, the whole `USER_CTRL` machine) assuming it.
+JieLi's 1拖2 products ship a *different, specially-built stack library* (the public
+SDKs bundle only single-device builds; the `multi_bd.c` source exists but compiles
+to nothing in the shipped configs). Realistic routes: (a) ask JieLi / TIDRADIO for a
+multipoint br23 stack build, (b) port the bd29-gen `multi_bd` core + widen
+`conn_info` in machine code (research-grade, fragile), or (c) single-device
+workarounds — one device that carries both profiles (the probe already proved SPP +
+HFP coexist on ONE link, e.g. a custom ESP32 "headset+PTT" combo, or a headset
+whose button triggers PTT via HFP hook events).
