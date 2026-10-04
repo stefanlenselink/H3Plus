@@ -64,7 +64,7 @@ All paths below are relative to the repo root.
    - [`verify_cli.py`](#71-verify_clipy) · [`verify_actions.py`](#72-verify_actionspy)
 8. [Typical workflows](#8-typical-workflows)
 9. [Ghidra pi32v2 decompile ⇒ compile route](#9-ghidra-pi32v2-decompile--compile-route)
-   - [`ghidra/MoveBlock.java`](#91-ghidramoveblockjava) · [`ghidra/SeedFunctions.java`](#92-ghidraseedfunctionsjava) · [`ghidra/DumpDecompiled.java`](#93-ghidradumpdecompiledjava) · [`ghidra/rt_is1t2.c` + `ghidra/splice_rt.py`](#94-round-trip-example)
+   - [`ghidra/MoveBlock.java`](#91-ghidramoveblockjava) · [`ghidra/SeedFunctions.java`](#92-ghidraseedfunctionsjava) · [`ghidra/DumpDecompiled.java`](#93-ghidradumpdecompiledjava) · [`ghidra/rt_is1t2.c` + `ghidra/splice_rt.py`](#94-round-trip-example) · [`disassemble_app.py` + `ghidra/DumpAll.java`](#95-full-app-disassembly--decompilation-tree)
 
 ---
 
@@ -1005,3 +1005,32 @@ python3 tools/ghidra/splice_rt.py <in.bin> <out.bin> work/roundtrip/rt_is1t2.bin
 (via `jl_sfcenc`), and verifies the crypto round-trip. The spliced image
 re-decompiles to **byte-identical C** (fixed point, §25.5). Regenerate the
 blob from the `.c` rather than committing binaries.
+
+### 9.5 Full-app disassembly & decompilation tree — `disassemble_app.py` + `ghidra/DumpAll.java`
+
+One command turns the decrypted app into a browsable `disassembled/` tree —
+decompiled C for **every** function (Ghidra `ParallelDecompiler`, all cores),
+per-function assembly, a linear listing, and function/symbol/string indexes:
+
+```bash
+python3 tools/disassemble_app.py                 # input defaults to work/app_dec.bin
+python3 tools/disassemble_app.py BIN/TD-H3-PlusV1.0.50.bin   # full image: auto-decrypted
+# options: --out DIR (default disassembled/) --ghidra DIR --project DIR --no-linear
+```
+
+| Output | Contents |
+|---|---|
+| `disassembled/decompiled/<addr>_<name>.c` | one file per function (~6.5 k) |
+| `disassembled/decompiled_all.c` | concatenated — grep-friendly |
+| `disassembled/disasm/<addr>_<name>.asm` | per-function assembly (Ghidra listing) |
+| `disassembled/full.lst` | linear disassembly via `pi32dis.py` |
+| `disassembled/functions.txt` | `addr size name` index |
+| `disassembled/symbols.txt` · `strings.txt` | symbol table · defined strings (VA + flash) |
+
+**`disassembled/` is gitignored on purpose** — it is derived from
+user-provided firmware and never published; regenerate instead of curating.
+The driver refuses to overwrite a directory without its
+`.h3plus-generated` marker. Ghidra projects land in `work/ghidra_disasm_proj/`
+(scratch). `DumpAll.java` is the post-script that does the dumping
+(`<outDir>` as its only script arg). Findings:
+[ch. 25 §25.8](../findings/25-ghidra-decompile-compile-route.md).

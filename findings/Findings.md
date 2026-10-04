@@ -3,7 +3,7 @@
 > Index for the RE effort on the TIDRADIO (TID Electronics) H3 Plus handheld transceiver.
 > Status: **firmware fully decrypted** — UBOOT *and* app region. Chip + chip key confirmed from hardware.
 > BT headset-mic PTT **hardware-confirmed** via 3–5 byte patches.
-> Last updated: 2026-10-03 (added [Ch. 25 — The Ghidra decompile ⇒ alter ⇒ compile route](25-ghidra-decompile-compile-route.md) — Ghidra 12 + ghidra-jieli decompiles the app, the official toolchain recompiles it, fixed-point proven; hardware "unchanged" test pending. Multipoint root cause closed in [Ch. 22 §9B.11](22-bluetooth-7-multipoint-architecture.md) — the stack tracks one BR/EDR link; earlier: [Ch. 24](24-jieli-ecosystem-sdk-toolchain.md) ecosystem sweep, **BT-PTT2 hardware-validated** — [Ch. 23](23-bluetooth-8-bt-ptt2.md)).
+> Last updated: 2026-10-03 (added [Ch. 25 — The Ghidra decompile ⇒ alter ⇒ compile route](25-ghidra-decompile-compile-route.md) — Ghidra 12 + ghidra-jieli decompiles the app, the official toolchain recompiles it, fixed-point proven **and hardware-validated**; `tools/disassemble_app.py` generates the full (gitignored) disassembly + decompilation tree (§25.8). Multipoint root cause closed in [Ch. 22 §9B.11](22-bluetooth-7-multipoint-architecture.md) — the stack tracks one BR/EDR link; earlier: [Ch. 24](24-jieli-ecosystem-sdk-toolchain.md) ecosystem sweep, **BT-PTT2 hardware-validated** — [Ch. 23](23-bluetooth-8-bt-ptt2.md)).
 
 > [!IMPORTANT]
 > **No firmware is published in this repository.** The folders `BIN/`, `FW/`, `Dumps/`

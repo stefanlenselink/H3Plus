@@ -71,13 +71,16 @@ result was **re-imported into Ghidra and re-decompiled: byte-identical C** to
 the decompilation of the original vendor code. vendor asm → C → vendor asm → C
 is a round trip at both ends.
 
-## 25.6 Hardware “unchanged” test — **UNTESTED**
+## 25.6 Hardware “unchanged” test — **PASSED 2026-10-03**
 
 Test image: `work/roundtrip/rt_test.bin` (built from `Dumps/dump_internal.bin`
 + `--PTT=BT-PTT --PTT2=BT-PTT2 --OD-PTT=PTT` + the two recompiled functions).
-Expected: identical behaviour to the current patched firmware (BT connects,
-BT-PTT works, normal PTT works). Flash with the usual
-`jl-uboot-tool` procedure and report.
+Flashed and verified on hardware: **BT connects, BT-PTT works, normal PTT
+works — identical behaviour to the current patched firmware.** Two vendor
+functions replaced by JieLi-clang builds of their Ghidra decompilation ran
+transparently. The decompile ⇒ alter ⇒ compile route is now
+**hardware-validated**: any function we can decompile we can rewrite in C,
+rebuild with the official toolchain, and ship.
 
 ## 25.7 What this route can and cannot fix (multipoint context)
 
@@ -94,8 +97,40 @@ BT-PTT works, normal PTT works). Flash with the usual
 * Cross-version note: Ghidra analysis is reproducible from
   `work/app_dec.bin`; keep the project in `work/` (scratch).
 
+## 25.8 Full-app disassembly & decompilation trees (2026-10-03)
+
+`tools/disassemble_app.py` runs the whole pipeline in one command and writes
+a browsable tree under **`disassembled/`** — which is **gitignored on
+purpose**: the output is derived from user-provided firmware and is not
+published here. Every user regenerates it locally:
+
+```bash
+python3 tools/disassemble_app.py            # input defaults to work/app_dec.bin
+python3 tools/disassemble_app.py BIN/TD-H3-PlusV1.0.50.bin   # full image: auto-decrypted
+```
+
+Output layout (all regenerated, nothing to curate):
+
+| Path | Contents |
+|---|---|
+| `disassembled/decompiled/<addr>_<name>.c` | Ghidra decompilation, one file per function (~6.5 k) |
+| `disassembled/decompiled_all.c` | the same, concatenated (grep-friendly) |
+| `disassembled/disasm/<addr>_<name>.asm` | per-function assembly from the Ghidra listing |
+| `disassembled/full.lst` | linear disassembly via `tools/pi32dis.py` (same format as before) |
+| `disassembled/functions.txt` | `addr size name` index of every function |
+| `disassembled/symbols.txt` | full symbol table |
+| `disassembled/strings.txt` | every Ghidra-defined string with VA **and** flash address |
+
+The heavy step (decompiling every function) uses Ghidra's
+`ParallelDecompiler` — all CPU cores. The Ghidra project lives in
+`work/ghidra_disasm_proj/` (scratch). The post-script doing the work is
+`tools/ghidra/DumpAll.java`; the driver refuses to overwrite a non-generated
+`disassembled/` (marker file `.h3plus-generated`).
+
 ---
 
 Next: use the decompiler on the HCI connection-request / connection-complete
 path and the app connect menu to find the eviction call site (§9B.11 named
 the suspects: `user_operation_control` @`0x01E21AF8`, ops table `0xBF48`).
+With `disassembled/` generated, that search is a grep over
+`decompiled_all.c` plus a read of the callers.

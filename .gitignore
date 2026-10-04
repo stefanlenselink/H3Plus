@@ -213,3 +213,5 @@ BIN/
 FW/
 Dumps/
 work/
+# Generated disassembly/decompilation trees (derived from user firmware; regenerate with tools/disassemble_app.py)
+disassembled/
