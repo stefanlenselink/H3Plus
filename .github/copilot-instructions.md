@@ -184,7 +184,10 @@ PTT unaffected, no `gp+0xC7` flag leak) · **ecosystem sweep: right SDK found (`
 **multipoint gate `user_ctrl_conn_num` located + `--conn-num=2` patch built**
 (ch. 22 §9B.10.2) — **hardware-tested 2026-10-03: eviction persists; the real cap is
 the stack's `[1 x conn_info]` data model, multipoint is NOT reachable by binary
-patch** (ch. 22 §9B.11).
+patch** (ch. 22 §9B.11) · **eviction decision located 2026-10-04** (ch. 26): app-level
+kick `0x01E5B22A` posts cmd 5 to the controller-queue relay `0x01E22890` (sole
+HCI-Disconnect executor `0x01E074DE`, reason 19); the stack never evicts; 4-byte
+kick-NOP experiment + options analysis in ch. 26 §26.7.
 
 Open (in priority order):
 1. ~~Hardware-validate BT-PTT2~~ ✅ **PASSED 2026-09-30** (ch. 23 §9C.8): flashed
@@ -211,7 +214,16 @@ Open (in priority order):
    build; and `user_info_t` embeds `[1 x conn_info]` in ALL public btstack.a builds
    (bd29/br23/br25/br30/bd19/br34) — the host stack tracks ONE BR/EDR link. The
    controller (bredr_table, `[4 x ...]` arrays) could do more; the precompiled host
-   stack cannot. Multipoint needs a vendor multipoint library, a machine-code data
+   stack cannot. **Eviction decision LOCATED 2026-10-04 (ch. 26):** app kick
+   `0x01E5B22A` (handle @`0x102F0+0x82`) → cmd 5 → queue `0x1A688` → relay
+   `0x01E22890` case 5 (`0x01E22996`, sole executor) → `0x01E074DE` (reason 19);
+   callers = BT on/off toggle `0x01E6076C(0)`, power API `0x01E83D84(1)`, command
+   table @`0x01E9C9DC` entry[1]. Stack never evicts (op 4 never posted; incoming
+   accepted blindly; `create_bt_new_conn` NULL when slot held — the kick frees the
+   slot). **NEXT: Option A experiment** (ch. 26 §26.7) — kick early-return
+   (`0x01E5B22A: 75 04 c5 ff → 40 23 80 00`) + `--conn-num=2`, one flash: does a
+   second untracked "ghost" ACL survive and do its SPP keys reach the app?
+   Multipoint otherwise needs a vendor multipoint library, a machine-code data
    model transplant (research-grade), or a single-device workaround (one device
    carrying SPP+HFP, e.g. custom ESP32 combo device — profile coexistence proven).
 3. ~~Ghidra + quarkslab/ghidra-jieli on Linux~~ ✅ **HARDWARE-VALIDATED 2026-10-03**
@@ -225,8 +237,9 @@ Open (in priority order):
    passed** (BT connects, BT-PTT works, normal PTT works) — the
    decompile⇒alter⇒compile route is live. `tools/disassemble_app.py` generates
    the full tree (every function decompiled + asm + indexes) under
-   **`disassembled/` — gitignored, never publish**. Next: find the eviction
-   decision site with the decompiler (grep `disassembled/decompiled_all.c`).
+   **`disassembled/` — gitignored, never publish**. ~~Next: find the eviction
+   decision site~~ ✅ **DONE 2026-10-04** — found via the decompilation tree +
+   `findva.py` (ch. 26).
 4. ~~AC635N/BR23 JieLi SDK acquisition~~ ✅ `fw-AC63_BT_SDK` `cpu/br23` (ch. 24 §24.1);
    next: feasibility build of `apps/spp_and_le` for br23 with the Linux toolchain
    (`-mcpu=r3`, `ulimit -n 8192`).

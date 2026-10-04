@@ -510,3 +510,9 @@ multipoint br23 stack build, (b) port the bd29-gen `multi_bd` core + widen
 workarounds — one device that carries both profiles (the probe already proved SPP +
 HFP coexist on ONE link, e.g. a custom ESP32 "headset+PTT" combo, or a headset
 whose button triggers PTT via HFP hook events).
+
+> **Update 2026-10-04 — the active eviction mechanism is now located:** the drop of the
+> incumbent is an **app-level kick** (`0x01E5B22A` → controller-queue cmd 5 → relay
+> `0x01E22890` case 5 → `hci_disconnect_cmd` `0x01E074DE`, reason 19); the stack itself
+> never evicts — it just can't track a second link. A 4-byte kick-NOP experiment and the
+> full options analysis are in [ch. 26 §26.7](26-bluetooth-9-eviction-decision.md#267--options-for-getting-multipoint-working).
