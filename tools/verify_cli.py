@@ -86,6 +86,10 @@ CASES = [
     # bluetooth-mode aliases
     ("bt_alias",        ["--bt", "2"], 0),
     ("bt_alias2",       ["--bluetooth-mode=5"], 0),
+    # multipoint Option A: kick-NOP, alone and combined with conn-num
+    ("nokick",          ["--no-kick"], 0),
+    ("nokick_cn",       ["--no-kick", "--conn-num=2"], 0),
+    ("nk_alias",        ["--NO-KICK"], 0),
 ]
 
 RE_BYTES = re.compile(r"plaintext bytes changed: (\d+)")
@@ -160,6 +164,17 @@ def main():
     run(["--bluetooth-mode", "2"], os.path.join(OUTDIR, "bt_alias_x.bin"))
     identical(os.path.join(OUTDIR, "bt_alias.bin"),
               os.path.join(OUTDIR, "bt_alias_x.bin"), "bt_alias", "bluetooth-mode 2")
+    # --NO-KICK must equal the canonical --no-kick build
+    identical(os.path.join(OUTDIR, "nk_alias.bin"),
+              os.path.join(OUTDIR, "nokick.bin"), "--NO-KICK", "--no-kick")
+    # --show must run clean on a kick-NOP'd image
+    exitcode, out = run([os.path.join(OUTDIR, "nokick.bin"), "--show",
+                         "--no-kick"])
+    if exitcode == 0 and "UNKNOWN" not in out.upper():
+        print("--show on nokick clean OK")
+    else:
+        print("--show on nokick -> FAIL")
+        fail += 1
     # --show must run clean on a patched image
     exitcode, out = run([os.path.join(OUTDIR, "c6_odptt_btptt.bin"), "--show",
                          "--PTT2=OD-PTT", "--OD-PTT=BT-PTT"])

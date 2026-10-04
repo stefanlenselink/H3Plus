@@ -89,6 +89,7 @@ python tools/patch_h3plus_firmware_bluetooth.py <src> [<dst>] [--show]
     [--PTT=BT-PTT|PTT] [--PTT2=...] [--OD-PTT=...]   # 20 action pairs build directly
     #   actions: PTT PTT2 BT-PTT BT-PTT2 OD-PTT (BT-PTT2 = BT mic forced to VFO B, HW-confirmed)
     [--conn-num=1|2]   # user_ctrl_conn_num gate, 1 byte; HW-tested insufficient (ch.22 §9B.10.2/§9B.11)
+    [--no-kick]        # NOP the app disconnect kick @0x01E5B22A (r0=3; rts); Option A = with --conn-num=2 (ch.26 §26.7)
     [--sectors=PREFIX] [--only SITE]
 ```
 
@@ -220,9 +221,11 @@ Open (in priority order):
    callers = BT on/off toggle `0x01E6076C(0)`, power API `0x01E83D84(1)`, command
    table @`0x01E9C9DC` entry[1]. Stack never evicts (op 4 never posted; incoming
    accepted blindly; `create_bt_new_conn` NULL when slot held — the kick frees the
-   slot). **NEXT: Option A experiment** (ch. 26 §26.7) — kick early-return
-   (`0x01E5B22A: 75 04 c5 ff → 40 23 80 00`) + `--conn-num=2`, one flash: does a
-   second untracked "ghost" ACL survive and do its SPP keys reach the app?
+   slot). **Option A implemented 2026-10-04** as `--no-kick` in the patch tool
+   (kick early-return `0x01E5B22A: 75 04 c5 ff → 40 23 80 00` = `r0=3; rts`; both
+   test suites green). **NEXT: hardware test** `--conn-num=2 --no-kick` (ch. 26 §26.7):
+   does a second untracked "ghost" ACL survive and do its SPP keys reach the app?
+   (Side effect to expect: BT-off/menu-disconnect no longer release the link.)
    Multipoint otherwise needs a vendor multipoint library, a machine-code data
    model transplant (research-grade), or a single-device workaround (one device
    carrying SPP+HFP, e.g. custom ESP32 combo device — profile coexistence proven).

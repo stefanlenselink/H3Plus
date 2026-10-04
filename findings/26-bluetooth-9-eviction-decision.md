@@ -172,8 +172,10 @@ simultaneously; "first or last connected wins" acceptable for the *controlling* 
 ### Option A — kick-NOP experiment (cheap, one flash) — **UNTESTED**
 
 Make the app's kick a no-op and keep `--conn-num=2` (so page scan stays enabled).
-Two equivalent 4-byte candidates (the kick is the *only* producer of cmd 5, and the
-relay case 5 its *only* executor):
+**Implemented 2026-10-04** as `--no-kick` in the patch tool (kick early-return
+variant; `--no-kick --conn-num=2` builds the full Option A, verified by both
+test suites). Two equivalent 4-byte candidates (the kick is the *only* producer
+of cmd 5, and the relay case 5 its *only* executor):
 
 | patch | VA / file / flash | stock bytes | patched |
 |---|---|---|---|
@@ -240,7 +242,9 @@ stack's connection table. Only meaningful combined with C.
 ### Recommendation
 
 1. **Flash Option A** (kick early-return + `--conn-num=2`) — one experiment, decisive
-   knowledge, trivially reversible.
+   knowledge, trivially reversible. **Build it with
+   `--PTT=BT-PTT --PTT2=BT-PTT2 --OD-PTT=PTT --conn-num=2 --no-kick`** (the
+   `--no-kick` flag shipped 2026-10-04; `--show` reports the kick site state).
 2. In parallel, treat **D1** as the pragmatic delivery path (works with today's
    patches).
 3. Keep **C** as the only route to *true* two-device multipoint; B/E only as

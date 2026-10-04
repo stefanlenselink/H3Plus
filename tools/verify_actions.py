@@ -303,6 +303,42 @@ if cp.returncode == 0:
 cp = run(SRC, os.path.join(OUTDIR, "v_no.bin"), "--conn-num=3")
 ck(cp.returncode != 0, "refuse --conn-num=3")
 
+# --- --no-kick (multipoint Option A, ch.26 SS26.4/SS26.7) -------------------
+nk = os.path.join(OUTDIR, "v_nokick.bin")
+cp = run(SRC, nk, "--only", "nokick", "--no-kick")
+ck(cp.returncode == 0, "--no-kick build")
+if cp.returncode == 0:
+    a = dec(nk)
+    ck(g(a, P.NOKICK_VA, 4) == b"\x40\x23\x80\x00",
+       "kick entry -> r0 = 3; rts")
+    d = [i for i in range(len(stock)) if stock[i] != a[i]]
+    ck(d == list(range(P.va_to_off(P.NOKICK_VA),
+                       P.va_to_off(P.NOKICK_VA) + 4)),
+       "nokick patch touches exactly 4 bytes (%s)" % [hex(x) for x in d])
+    cp = run(nk, "--show", "--no-kick")
+    nkline = [l for l in cp.stdout.splitlines() if l.startswith("nokick")]
+    ck(cp.returncode == 0 and "UNKNOWN" not in cp.stdout
+       and len(nkline) == 1 and "TARGET" in nkline[0],
+       "--show on patched nokick clean")
+    cp2 = run(nk, nk + ".2", "--only", "nokick", "--no-kick")
+    ck(cp2.returncode == 0 and "Nothing to do" in cp2.stdout,
+       "nokick idempotent")
+    cp3 = run(nk, os.path.join(OUTDIR, "v_kickback.bin"),
+              "--only", "nokick")
+    ck(cp3.returncode == 0 and dec(os.path.join(OUTDIR, "v_kickback.bin"))
+       [P.va_to_off(P.NOKICK_VA):P.va_to_off(P.NOKICK_VA) + 4]
+       == b"\x75\x04\xc5\xff", "nokick reverts to stock")
+# Option A combo: kick-NOP + conn-num=2 in one build
+ca = os.path.join(OUTDIR, "v_optiona.bin")
+cp = run(SRC, ca, "--no-kick", "--conn-num=2", "--PTT=BT-PTT",
+         "--PTT2=BT-PTT2", "--OD-PTT=PTT")
+ck(cp.returncode == 0, "Option A combo build (--no-kick --conn-num=2)")
+if cp.returncode == 0:
+    a = dec(ca)
+    ck(g(a, P.NOKICK_VA, 4) == b"\x40\x23\x80\x00"
+       and g(a, P.CONN_NUM_VA, 2) == b"\x31\x25",
+       "Option A carries both kick-NOP and conn_num=2")
+
 # --- cleanup ----------------------------------------------------------------
 if not fail and not KEEP:
     shutil.rmtree(OUTDIR)

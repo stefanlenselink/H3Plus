@@ -137,7 +137,8 @@ python tools/patch_h3plus_firmware_bluetooth.py <src> [dst] [options]
 | `--PTT2=ACTION` | What the PF menu option **"PTT2"** does on every PF key assigned to it. **Default `PTT2`** (stock: TX forced to VFO B). Any of the five actions (`PTT`, `PTT2`, `BT-PTT`, `BT-PTT2`, `OD-PTT`) works as long as `--OD-PTT` differs from it. |
 | `--OD-PTT=ACTION` | What the PF menu option **"OD PTT"** does. **Default `OD-PTT`** (stock: one-key duplex). Any of the five actions works as long as `--PTT2` differs from it. |
 | `--conn-num=1\|2` | **EXPERIMENTAL / UNTESTED.** Rewrite the stack's `user_ctrl_conn_num` init (`r1 \|= 16` → `\|= 32` at VA `0x01E182DC`, one byte) — the 2-bit "how many BT connections may be active" gate ([§9B.10.2](../findings/22-bluetooth-7-multipoint-architecture.md#9b102-gate-fully-located--the---conn-num-one-byte-patch-2026-10-02-untested)). `1` = stock single-device; `2` = ask the stack for multipoint (headset + TID-PTT button). Default: site untouched (but `--show` reports both states). |
-| `--only=NAME` | Apply only this internal patch (repeatable; expert / inspection). Names: `duplex`, `ptt` (known-bad), `pttdown`, `pttup`, `pf1down`, `pf1up`, `pf2down`, `pf2up` (legacy scanner literals), `pfbody7`, `pfbody8`, `pfrelease`, `pftable`, `pfhandler`, `pfcave`, `pflabels`, `connum`. Default set is `duplex` plus the key patches implied by the action options. When `--only` is given, the default `--PTT=BT-PTT` is **not** added unless `--PTT` is also given explicitly. |
+| `--no-kick` | **EXPERIMENTAL / UNTESTED.** Disable the app's disconnect kick — the ONLY code that disconnects a BT device ([Ch. 26 §26.4](../findings/26-bluetooth-9-eviction-decision.md#264--the-kick-routine-0x01e5b22a--the-eviction-decision)). The app runs it before paging a second device, which is why a second device always evicts the first even with `--conn-num=2` (hardware-confirmed). Rewrites the routine entry `0x01E5B22A` (`75 04 c5 ff` → `40 23 80 00` = `r0 = 3; rts`, the stock "no connection" return): no app-initiated disconnects ever happen, so a second device may survive as a passive "ghost link". **Side effects:** BT off / menu disconnect stop releasing the link. Option A of [§26.7](../findings/26-bluetooth-9-eviction-decision.md#267--options-for-getting-multipoint-working): combine with `--conn-num=2`. Default: off (but `--show` reports both states). |
+| `--only=NAME` | Apply only this internal patch (repeatable; expert / inspection). Names: `duplex`, `ptt` (known-bad), `pttdown`, `pttup`, `pf1down`, `pf1up`, `pf2down`, `pf2up` (legacy scanner literals), `pfbody7`, `pfbody8`, `pfrelease`, `pftable`, `pfhandler`, `pfcave`, `pflabels`, `connum`, `nokick`. Default set is `duplex` plus the key patches implied by the action options. When `--only` is given, the default `--PTT=BT-PTT` is **not** added unless `--PTT` is also given explicitly. |
 | `--sectors=PREFIX` | Also export each changed 4 KiB flash sector as `PREFIX_<addr>.bin`, and print the exact `jl-uboot-tool` `erase` / `write` / `read … verify` commands. **Raw `.bin` / full dump only** — on a `.fw` container offsets ≠ flash addresses, and the tool refuses. |
 
 Option **names** and **action values** are matched case-insensitively (`--ptt=bt-ptt`
@@ -225,6 +226,11 @@ python tools/patch_h3plus_firmware_bluetooth.py Dumps/dump_internal.bin out.bin 
 # the user_ctrl_conn_num gate (§9B.10.2); combine with the normal actions
 python tools/patch_h3plus_firmware_bluetooth.py Dumps/dump_internal.bin out.bin \
     --PTT=BT-PTT --PTT2=BT-PTT2 --OD-PTT=PTT --conn-num=2
+
+# EXPERIMENTAL (UNTESTED): multipoint Option A (ch. 26 §26.7) — conn-num=2
+# PLUS disabling the app's disconnect kick (the actual evictor)
+python tools/patch_h3plus_firmware_bluetooth.py Dumps/dump_internal.bin out.bin \
+    --PTT=BT-PTT --PTT2=BT-PTT2 --OD-PTT=PTT --conn-num=2 --no-kick
 
 # minimal in-place flashing: export just the changed 4 KiB sectors + flash commands
 python tools/patch_h3plus_firmware_bluetooth.py BIN/TD-H3-PlusV1.0.50.bin --sectors=work/sect

@@ -857,6 +857,36 @@ CONN_NUM_LABELS = {
     "2": "conn_num = 2 (multipoint: two BT devices, UNTESTED)",
 }
 
+# --------------------------------------------------------------------------
+# --no-kick: the app's disconnect kick (multipoint Option A, Findings ch. 26
+# SS26.4 / SS26.7). The routine at 0x01E5B22A is the ONLY code path in the
+# app that disconnects a connected BT device: if the device struct at RAM
+# 0x102F0 holds a connection handle (offset 0x82, RAM 0x10372) it sets state
+# 4 and posts cmd 5 to the BT command queue (0x1A688); the relay handler
+# (0x01E22890, case 5 at 0x01E22996) runs hci_disconnect_cmd with reason 19.
+# The app calls the kick before paging a second device - and on BT off /
+# menu disconnect - which is why a second device always EVICTS the first
+# even with --conn-num=2 (hardware-confirmed, ch. 22 SS9B.6.1, ch. 26).
+# Replacing the entry with `r0 = 3; rts` (40 23 80 00) mimics the stock
+# "no connection" early-return: nothing is ever torn down. EXPECT SIDE
+# EFFECTS: turning Bluetooth off and the menu "disconnect" no longer
+# release the link (power-cycle instead), and the stack still owns ONE
+# conn_info slot, so a second device joins as a passive "ghost link" -
+# whether its SPP keys reach the app is the experiment. UNTESTED on
+# hardware. Option A = this flag combined with --conn-num=2.
+# --------------------------------------------------------------------------
+NOKICK_VA = 0x01E5B22A
+NOKICK_CTX_VA = NOKICK_VA
+NOKICK_CTX = bytes.fromhex("7504 c5ff f002 0100 50ed 5208 004f bf ea")
+NOKICK_STATES = {
+    "stock": bytes.fromhex("7504c5ff"),
+    "disabled": bytes.fromhex("40238000"),  # r0 = 3; rts
+}
+NOKICK_LABELS = {
+    "stock": "kick active: disconnects the current device (stock)",
+    "disabled": "r0 = 3; rts (kick disabled: never disconnects, UNTESTED)",
+}
+
 # Kept for tools/verify_actions.py: the native body addresses.
 ODPTT_PRESS_VA = PF_BODY8_VA
 ODPTT_RELEASE_VA = REL_OD_BODY_VA
@@ -1094,7 +1124,7 @@ def _ctx_variant_fn(va, ctx_va, ctx_base):
 
 
 def build_patches(duplex_mode=4, ptt2_action="PTT2", odptt_action="OD-PTT",
-                  conn_num=None):
+                  conn_num=None, no_kick=False):
     """Return the patch table, with the `duplex` patch's target selected by
     `duplex_mode` (see DUPLEX_LABELS) and the `pflabels` multi-patch built
     for the (--PTT2, --OD-PTT) action pair (see PF_COMBO_PATCHES). The
@@ -1102,7 +1132,8 @@ def build_patches(duplex_mode=4, ptt2_action="PTT2", odptt_action="OD-PTT",
     image patched with a different combination is still recognised. The
     stock pair has no label patch at all. `conn_num` (1 or 2) selects the
     target of the experimental stack connection-count gate (see CONN_NUM_VA);
-    the patch entry is always present so --show recognises both states."""
+    `no_kick` disables the app's disconnect kick (see NOKICK_VA). Both
+    entries are always present so --show recognises all states."""
     if duplex_mode not in DUPLEX_STATES:
         raise SystemExit("--bluetooth-mode must be one of %s" % sorted(DUPLEX_STATES))
     validate_pf_combo(ptt2_action, odptt_action)
@@ -1143,6 +1174,18 @@ def build_patches(duplex_mode=4, ptt2_action="PTT2", odptt_action="OD-PTT",
         "ctx_base": CONN_NUM_CTX,
         "ctx_variant": _ctx_variant_fn(CONN_NUM_VA, CONN_NUM_CTX_VA,
                                        CONN_NUM_CTX),
+    }
+    nk = "disabled" if no_kick else "stock"
+    patches["nokick"] = {
+        "desc": "app disconnect kick (0x01E5B22A) -> %s" % nk,
+        "va": NOKICK_VA,
+        "new": NOKICK_STATES[nk],
+        "states": NOKICK_STATES,
+        "labels": NOKICK_LABELS,
+        "target": nk,
+        "ctx_va": NOKICK_CTX_VA,
+        "ctx_base": NOKICK_CTX,
+        "ctx_variant": _ctx_variant_fn(NOKICK_VA, NOKICK_CTX_VA, NOKICK_CTX),
     }
     for name, (va, ctx_va, ctx_hex, native, spp, what) in KEYCODE_PATCHES.items():
         states = {"native": bytes([0x48, native]), "spp": bytes([0x48, spp])}
@@ -1710,6 +1753,24 @@ def main():
         "for audio and mic routing. Findings ch. 22 SS9B.10.",
     )
     ap.add_argument(
+        "--no-kick",
+        dest="no_kick",
+        action="store_true",
+        help="EXPERIMENTAL (UNTESTED on hardware): disable the app's "
+        "disconnect kick. The routine at 0x01E5B22A is the ONLY code that "
+        "disconnects a BT device, and the app runs it before paging a "
+        "second one - which is why a second device always evicts the "
+        "first, even with --conn-num=2 (hardware-confirmed). Patching it "
+        "to `r0 = 3; rts` (the stock no-connection return) stops all "
+        "app-initiated disconnects, so a second device (e.g. a TID-PTT "
+        "button joining while a headset holds HFP) may stay linked as a "
+        "passive 'ghost' connection. Option A of Findings ch. 26 SS26.7: "
+        "combine with --conn-num=2. SIDE EFFECTS: turning Bluetooth off "
+        "and the menu disconnect no longer release the link "
+        "(power-cycle instead); audio/mic routing for the second link is "
+        "undefined.",
+    )
+    ap.add_argument(
         "--sectors",
         metavar="PREFIX",
         help="also export the changed 4 KiB flash sectors as PREFIX_<addr>.bin "
@@ -1731,7 +1792,8 @@ def main():
         )
     validate_pf_combo(a7, a8)
 
-    PATCHES = build_patches(args.bluetooth_mode, a7, a8, args.conn_num)
+    PATCHES = build_patches(args.bluetooth_mode, a7, a8, args.conn_num,
+                            args.no_kick)
 
     raw, app, app_start = load_app(args.src)
     print("source: %s (%d bytes)" % (args.src, len(raw)))
@@ -1739,10 +1801,13 @@ def main():
         "app region: container 0x%X-0x%X, flash 0x%X, chipkey 0x%04X\n"
         % (app_start, app_start + APP_LEN, FLASH_BASE, CHIPKEY)
     )
+    extra = ""
+    if args.conn_num is not None:
+        extra += " --conn-num=%d (EXPERIMENTAL)" % args.conn_num
+    if args.no_kick:
+        extra += " --no-kick (EXPERIMENTAL)"
     print("configuration: --bluetooth-mode %d --PTT=%s --PTT2=%s --OD-PTT=%s%s\n"
-          % (args.bluetooth_mode, ptt_action, a7, a8,
-             "" if args.conn_num is None
-             else " --conn-num=%d (EXPERIMENTAL)" % args.conn_num))
+          % (args.bluetooth_mode, ptt_action, a7, a8, extra))
 
     if args.show or not (args.dst or args.sectors):
         show(app)
@@ -1763,6 +1828,8 @@ def main():
         wanted += pf_combo_patches(a7, a8)
     if args.conn_num is not None:
         wanted += ["connum"]
+    if args.no_kick:
+        wanted += ["nokick"]
     wanted = list(dict.fromkeys(wanted))
     if ({"pfbody7", "pfbody8", "pfrelease", "pflabels"} & set(wanted)
             and PF_LITERAL_PATCHES & set(wanted)):
