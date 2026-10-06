@@ -339,6 +339,42 @@ if cp.returncode == 0:
        and g(a, P.CONN_NUM_VA, 2) == b"\x31\x25",
        "Option A carries both kick-NOP and conn_num=2")
 
+# --- --force-page-scan (multipoint Option A2, ch.26 SS26.9) -----------------
+fp = os.path.join(OUTDIR, "v_pagescan.bin")
+cp = run(SRC, fp, "--only", "pagescan", "--force-page-scan")
+ck(cp.returncode == 0, "--force-page-scan build")
+if cp.returncode == 0:
+    a = dec(fp)
+    ck(g(a, P.PAGESCAN_VA, 4) == b"\x00\x00\x00\x00",
+       "page-scan disable branch -> nop; nop")
+    d = [i for i in range(len(stock)) if stock[i] != a[i]]
+    ck(d == list(range(P.va_to_off(P.PAGESCAN_VA),
+                       P.va_to_off(P.PAGESCAN_VA) + 4)),
+       "pagescan patch touches exactly 4 bytes (%s)" % [hex(x) for x in d])
+    cp = run(fp, "--show", "--force-page-scan")
+    psline = [l for l in cp.stdout.splitlines() if l.startswith("pagescan")]
+    ck(cp.returncode == 0 and "UNKNOWN" not in cp.stdout
+       and len(psline) == 1 and "TARGET" in psline[0],
+       "--show on patched pagescan clean")
+    cp2 = run(fp, fp + ".2", "--only", "pagescan", "--force-page-scan")
+    ck(cp2.returncode == 0 and "Nothing to do" in cp2.stdout,
+       "pagescan idempotent")
+    cp3 = run(fp, os.path.join(OUTDIR, "v_psback.bin"), "--only", "pagescan")
+    ck(cp3.returncode == 0 and dec(os.path.join(OUTDIR, "v_psback.bin"))
+       [P.va_to_off(P.PAGESCAN_VA):P.va_to_off(P.PAGESCAN_VA) + 4]
+       == b"\x80\x41\x24\x16", "pagescan reverts to stock")
+# Option A2 combo: kick-NOP + conn-num=2 + force-page-scan
+ca2 = os.path.join(OUTDIR, "v_optiona2.bin")
+cp = run(SRC, ca2, "--no-kick", "--conn-num=2", "--force-page-scan",
+         "--PTT=BT-PTT", "--PTT2=BT-PTT2", "--OD-PTT=PTT")
+ck(cp.returncode == 0, "Option A2 combo build (+--force-page-scan)")
+if cp.returncode == 0:
+    a = dec(ca2)
+    ck(g(a, P.NOKICK_VA, 4) == b"\x40\x23\x80\x00"
+       and g(a, P.CONN_NUM_VA, 2) == b"\x31\x25"
+       and g(a, P.PAGESCAN_VA, 4) == b"\x00\x00\x00\x00",
+       "Option A2 carries kick-NOP + conn_num=2 + page-scan NOP")
+
 # --- cleanup ----------------------------------------------------------------
 if not fail and not KEEP:
     shutil.rmtree(OUTDIR)

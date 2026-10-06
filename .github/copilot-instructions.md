@@ -90,6 +90,7 @@ python tools/patch_h3plus_firmware_bluetooth.py <src> [<dst>] [--show]
     #   actions: PTT PTT2 BT-PTT BT-PTT2 OD-PTT (BT-PTT2 = BT mic forced to VFO B, HW-confirmed)
     [--conn-num=1|2]   # user_ctrl_conn_num gate, 1 byte; HW-tested insufficient (ch.22 §9B.10.2/§9B.11)
     [--no-kick]        # NOP the app disconnect kick @0x01E5B22A (r0=3; rts); Option A = with --conn-num=2 (ch.26 §26.7)
+    [--force-page-scan] # NOP page-scan disable branch @0x01E18B0E (nop;nop) — radio stays connectable while connected; Option A2 (ch.26 §26.9)
     [--sectors=PREFIX] [--only SITE]
 ```
 
@@ -223,9 +224,18 @@ Open (in priority order):
    accepted blindly; `create_bt_new_conn` NULL when slot held — the kick frees the
    slot). **Option A implemented 2026-10-04** as `--no-kick` in the patch tool
    (kick early-return `0x01E5B22A: 75 04 c5 ff → 40 23 80 00` = `r0=3; rts`; both
-   test suites green). **NEXT: hardware test** `--conn-num=2 --no-kick` (ch. 26 §26.7):
-   does a second untracked "ghost" ACL survive and do its SPP keys reach the app?
-   (Side effect to expect: BT-off/menu-disconnect no longer release the link.)
+   test suites green). **HW round 1 2026-10-05: kick-NOP CONFIRMED** — incoming
+   attempts no longer evict the headset (readback-verified NOP), but the radio
+   answers no pages while connected (btmon `Page Timeout`; scan policy re-enables
+   page scan only when `is_1t2_connection()` false, vendor `multi_bd.c` compiled
+   EMPTY). **Option A2 shipped 2026-10-06** as `--force-page-scan` (NOP the
+   page-scan disable branch `0x01E18B0E: 80 41 24 16 → 00 00 00 00`; every setter
+   call enables page scan; suites green). **NEXT: hardware test** Option A2
+   (`--conn-num=2 --no-kick --force-page-scan`): PC/PTT pages the radio while the
+   headset holds HFP — does the ACL + SPP come up without eviction? If SPP is
+   refused, next gate = app single-device SPP/profile binding (struct `0x102F0`).
+   (Side effects to expect: BT-off/menu-disconnect no longer release the link;
+   radio always connectable.)
    Multipoint otherwise needs a vendor multipoint library, a machine-code data
    model transplant (research-grade), or a single-device workaround (one device
    carrying SPP+HFP, e.g. custom ESP32 combo device — profile coexistence proven).

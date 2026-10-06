@@ -252,8 +252,10 @@ stack's connection table. Only meaningful combined with C.
 
 ## §26.8 — Open questions
 
-- Does the app's SPP RX path accept data from a link with no `conn_info` (ghost link)?
-  (Decides Option A's value — flash test.)
+- ~~Does the app's SPP RX path accept data from a link with no `conn_info`?~~
+  Superseded by §26.9: the stack's conn pool has 20 entries — a second link gets
+  a real conn entry; the open question is now the **app's SPP/profile binding**
+  to its single device struct (test with Option A2).
 - What exactly does the untraced command-table dispatcher at `0x01E9C9DC` consume from
   (menu key events? a ROM-side task-command interpreter — note the `"tsk_read:"`
   string immediately before the table)?
@@ -261,6 +263,136 @@ stack's connection table. Only meaningful combined with C.
   because the app struct is overwritten? (Both consistent with test 1; not traced.)
 - `FUN_01e4e2ba/c4` state machine semantics (state 4 = "disconnecting"?) — mapped only
   shallowly.
+
+## §26.9 — Option A hardware round 1: kick-NOP **works**, page scan is the next gate (2026-10-05/06)
+
+Option A (`--no-kick --conn-num=2`, kick NOP readback-confirmed via
+`cmp Dumps/rb_060000.bin work/opta_060000.bin` → `NOP-ON-CHIP`) was flashed and
+tested. Results, in order:
+
+1. **Radio-initiated second device still evicted** the headset at the moment the
+   found-device was selected in the pairing list ("Bluetooth disconnected" on radio
+   *and* headset, then "Bluetooth connected" for the joiner a second later).
+2. **Incoming connections no longer evict anything.** With the headset up, PC page
+   attempts (`hcitool cc` / `bt_spp_hold.py`) failed with **`Page Timeout (0x04)`**
+   (btmon, `Create Connection` → `Connect Complete`), and the headset stayed
+   connected and fully functional throughout. The earlier `ECONNRESET`/`EHOSTDOWN`
+   variants were the PC stack's own caching/timeouts; btmon is unambiguous.
+
+**Interpretation.**
+
+* The kick NOP is live and effective: the app can no longer tear anything down —
+  the second-device join attempts leave the incumbent alone (this never happened
+  on stock firmware).
+* The remaining gate is **page scan**: while any link is up the radio answers no
+  pages at all. Static cause (v50): the BT task's scan policy only *enables* page
+  scan when `is_1t2_connection()` (`FUN_01e1787c`) is **false** (task cases `0xd`/`0xf`
+  in the dispatcher around `0x01E21E46`), and the vendor's 1拖2 scan logic lived in
+  `multi_bd.c` — which is **compiled EMPTY in this firmware** (the linked
+  `multi_bd.bc` contains only two stray debug-flag globals; the module's code was
+  `#if`-ed out at vendor build time). So in `conn_num = 2` mode nothing ever
+  turns page scan on while connected.
+* The eviction seen in radio-initiated pairing (result 1) is therefore **not** the
+  kick (dead) and **not** the stack (its HCI event dispatcher
+  `FUN_01e19a78` has no replacement logic; conn pool = 20 entries, pending list
+  dynamic) — it is the outgoing-page path itself: the controller is configured
+  single-ACL, and paging a second device while connected breaks the incumbent at
+  the baseband/LMP level. Incoming pages avoid that path entirely.
+
+**Structural facts established this round (all static, v50):**
+
+* Conn-entry allocator `FUN_01e17414` draws from the pool at `[0x1A4D8]+4`:
+  **20 entries × 0x38 B** (pool init `0x01E18B92`–`0x01E18BDA`). The host stack
+  can track many links; the single-device cap is app-layer + controller config.
+* HCI event dispatcher `FUN_01e19a78` (event 0x03 CONNECTION_COMPLETE, 0x05
+  DISCONNECTION_COMPLETE, 0x13 REMOTE_NAME): pure pending-list bookkeeping,
+  **no eviction**.
+* Relay `FUN_01e22890` fully enumerated: case 5 is the only HCI Disconnect;
+  cases 7/9/10/13/14/20/24/25/26 are no-ops.
+* Scan state byte at RAM `0xBEC8` (bit 0 = inquiry scan, bit 1 = page scan).
+  Page-scan setter `FUN_01e18afc` @ `0x01E18AFC`; HCI wrapper `FUN_01e08672`
+  (`write_scan_enable`, opcode `0x0C1A`).
+
+**Option A2 — `--force-page-scan` (shipped 2026-10-06).** NOP the page-scan
+*disable* branch inside the setter so every call enables page scan:
+
+```
+0x01E18B0E:  80 41 24 16  ->  00 00 00 00     (nop; nop)
+  stock:  if (r0 != 0) goto keep; r4 = r2(cleared)   ; r0=0 -> disable
+  patched: fall through; r4 stays r3|2               ; every call -> enable
+```
+
+File offset `0x18B0E`, flash `0x1DB0E`. The stack's post-connect "disable page
+scan" now turns it **on**, leaving the radio connectable while the headset holds
+HFP. Side effect: the radio is always connectable (any paired device may page
+it); paging behaviour slightly busier. Build:
+
+```bash
+python tools/patch_h3plus_firmware_bluetooth.py Dumps/dump_internal.bin \
+    --PTT=BT-PTT --PTT2=BT-PTT2 --OD-PTT=PTT \
+    --conn-num=2 --no-kick --force-page-scan --sectors=../jl-uboot-tool/multi-bt-ptt2
+```
+
+**Option A2 hardware test (next):** with the new image flashed and the headset
+connected, the PC (or the TID-PTT button, which connects *to* the radio's SPP
+server) should now get an ACL + SPP while the headset survives. If the ACL comes
+up but SPP is refused, the next gate is the app's single-device SPP/profile
+binding (struct `0x102F0`), which is patchable with the same direct-rewrite model.
+
+## §26.11 — Option A2 hardware round 2: page scan **works**; the wall is `conn_info` (2026-10-06)
+
+Image: `--PTT=BT-PTT --PTT2=BT-PTT2 --OD-PTT=PTT --conn-num=2 --no-kick
+--force-page-scan` (full `.bin` from the user's dump). Capture:
+`btmon -w /tmp/spp_reject.hcd` on the PC (adapter `90:DE:80:55:E3:A6`).
+
+**Result 1 — `--force-page-scan` hardware-confirmed.** With the headset
+holding HFP, the PC's `Create Connection` to the radio (`0B:FF:59:E8:85:92`)
+is now **answered**: `Connect Complete` 650 ms after the page (was
+`Page Timeout 0x04` pre-patch). The radio is connectable while connected.
+The kick-NOP also held: the headset survived every attempt.
+
+**Result 2 — the second link is refused one layer deeper.** Two outcomes,
+same gate: (a) `Connect Complete` status **`0x13` Remote User Terminated**
+(~650 ms after link up), and (b) `bt_spp_hold` → **`ECONNRESET`** (ACL up,
+RFCOMM/SPP reset). Static analysis this round proves the **app image is
+innocent** of the teardown:
+
+* Every HCI sender enumerated: opcode `0x406` (Disconnect) appears exactly
+  once in the image — the kick path `FUN_01e074de` @ `0x01E074DE`, whose only
+  producer is the dead kick. Relay cmd 1 → vendor `0x200A` is connectable-mode
+  control (posted by `FUN_01e4e2e4` only when the tracked handle is 0), not a
+  disconnect.
+* Incoming-connection policy (stack task, case 4 @ `0x01E1A49E`/`0x01E1A4CC`):
+  ACLs are **accepted** (role 1). Reject (reason `0x0A`) only for unknown link
+  types. The veto hook `FUN_01e18ffa` reads ops-table slot `[0xBF48+0x24]` —
+  the never-written `update_multi_bd_status` slot (§9B.11) — so it returns 0.
+* The app's SPP RX path is **device-agnostic**: BT event dispatcher
+  `FUN_01e83db4` case 7 → parser `FUN_01e5b2f4` (strncmp `+SPP=P`→key 0x2A,
+  `+SPP=R`→0x2B, `AT+MPTT=1/0`, `CH_KEY=+/-`, `+POWER=0`) → key queue. No
+  device check anywhere on the data path.
+
+⇒ The refusal is the stack's **profile/conn layer**: the second ACL has no
+`conn_info` slot (`user_info_t.conn[1]`, [§9B.11](22-bluetooth-7-multipoint-architecture.md#9b11--the-real-cap-the-stacks-connection-data-model-is-1-x-conn_info)),
+so RFCOMM on the new handle is refused and the link is torn down. `conn_num=2`
+opens the scan/policy gates; the data model remains single-device. **Option B
+(widen `conn_info`) is the only remaining binary path** to true multipoint.
+
+**Result 3 — test-setup gotcha (the "PTT invisible" scare).** The trace shows
+the TID-PTT button (`6F:E5:E7:FB:12:4F`, name `TID-PTT0cd28a-B`, class
+`0x240404`) paging and **connecting to the PC** (btmon event #12) — BlueZ
+auto-connects paired devices. While connected to the PC the PTT is invisible
+to the radio's inquiry. **Turn the PC adapter off (or
+`bluetoothctl remove 6F:E5:E7:FB:12:4F`) before testing radio-side pairing.**
+Not a firmware issue.
+
+**Controlled tests to pin the boundary (next):**
+
+1. Headset off, radio idle → PC `bt_spp_hold` → expect success (sanity that
+   the patch trio didn't break the normal single-device path).
+2. Headset connected → PC `bt_spp_hold` → expect `0x13`/`ECONNRESET` (the
+   `conn_info` wall).
+3. During test 2, `watch -n0.2 hcitool con` on the PC — does the second ACL
+   persist ≥1 s (ghost link) or die at establishment?
 
 ---
 

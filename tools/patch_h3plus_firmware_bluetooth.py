@@ -887,6 +887,34 @@ NOKICK_LABELS = {
     "disabled": "r0 = 3; rts (kick disabled: never disconnects, UNTESTED)",
 }
 
+# --------------------------------------------------------------------------
+# --force-page-scan: keep page scan enabled while connected (multipoint
+# Option A2, Findings ch. 26 SS26.9). With --no-kick the radio no longer
+# evicts the first device (hardware-confirmed), but it still answers no
+# incoming pages once a link is up: btmon shows "Page Timeout (0x04)",
+# i.e. page scan is OFF while connected. The scan policy (BT task cases
+# 0xd/0xf) only re-enables page scan when is_1t2_connection() is FALSE,
+# and the vendor's 1-to-2 scan logic lived in multi_bd.c, which is
+# compiled EMPTY in this firmware. The page-scan setter at 0x01E18AFC
+# updates bit 1 of the scan byte (RAM 0xBEC8) and issues
+# hci_write_scan_enable (0x0C1A); its disable decision is the pair of
+# instructions at 0x01E18B0E (`if (r0 != 0) goto keep; r4 = r2` i.e.
+# cleared). NOP-ing both makes EVERY call enable page scan, so the
+# stack's post-connect "disable" turns it ON instead and the radio stays
+# connectable while a headset holds HFP. UNTESTED on hardware.
+# --------------------------------------------------------------------------
+PAGESCAN_VA = 0x01E18B0E
+PAGESCAN_CTX_VA = PAGESCAN_VA
+PAGESCAN_CTX = bytes.fromhex("8041 2416 9c40 bfea")
+PAGESCAN_STATES = {
+    "stock": bytes.fromhex("80412416"),
+    "forced": bytes.fromhex("00000000"),  # nop; nop -> always enable
+}
+PAGESCAN_LABELS = {
+    "stock": "page scan follows stack policy (off while connected)",
+    "forced": "nop; nop (page scan always enabled, UNTESTED)",
+}
+
 # Kept for tools/verify_actions.py: the native body addresses.
 ODPTT_PRESS_VA = PF_BODY8_VA
 ODPTT_RELEASE_VA = REL_OD_BODY_VA
@@ -1124,7 +1152,7 @@ def _ctx_variant_fn(va, ctx_va, ctx_base):
 
 
 def build_patches(duplex_mode=4, ptt2_action="PTT2", odptt_action="OD-PTT",
-                  conn_num=None, no_kick=False):
+                  conn_num=None, no_kick=False, force_page_scan=False):
     """Return the patch table, with the `duplex` patch's target selected by
     `duplex_mode` (see DUPLEX_LABELS) and the `pflabels` multi-patch built
     for the (--PTT2, --OD-PTT) action pair (see PF_COMBO_PATCHES). The
@@ -1132,8 +1160,10 @@ def build_patches(duplex_mode=4, ptt2_action="PTT2", odptt_action="OD-PTT",
     image patched with a different combination is still recognised. The
     stock pair has no label patch at all. `conn_num` (1 or 2) selects the
     target of the experimental stack connection-count gate (see CONN_NUM_VA);
-    `no_kick` disables the app's disconnect kick (see NOKICK_VA). Both
-    entries are always present so --show recognises all states."""
+    `no_kick` disables the app's disconnect kick (see NOKICK_VA);
+    `force_page_scan` keeps page scan enabled while connected (see
+    PAGESCAN_VA). All entries are always present so --show recognises all
+    states."""
     if duplex_mode not in DUPLEX_STATES:
         raise SystemExit("--bluetooth-mode must be one of %s" % sorted(DUPLEX_STATES))
     validate_pf_combo(ptt2_action, odptt_action)
@@ -1186,6 +1216,19 @@ def build_patches(duplex_mode=4, ptt2_action="PTT2", odptt_action="OD-PTT",
         "ctx_va": NOKICK_CTX_VA,
         "ctx_base": NOKICK_CTX,
         "ctx_variant": _ctx_variant_fn(NOKICK_VA, NOKICK_CTX_VA, NOKICK_CTX),
+    }
+    ps = "forced" if force_page_scan else "stock"
+    patches["pagescan"] = {
+        "desc": "page-scan disable branch (0x01E18B0E) -> %s" % ps,
+        "va": PAGESCAN_VA,
+        "new": PAGESCAN_STATES[ps],
+        "states": PAGESCAN_STATES,
+        "labels": PAGESCAN_LABELS,
+        "target": ps,
+        "ctx_va": PAGESCAN_CTX_VA,
+        "ctx_base": PAGESCAN_CTX,
+        "ctx_variant": _ctx_variant_fn(PAGESCAN_VA, PAGESCAN_CTX_VA,
+                                       PAGESCAN_CTX),
     }
     for name, (va, ctx_va, ctx_hex, native, spp, what) in KEYCODE_PATCHES.items():
         states = {"native": bytes([0x48, native]), "spp": bytes([0x48, spp])}
@@ -1771,6 +1814,21 @@ def main():
         "undefined.",
     )
     ap.add_argument(
+        "--force-page-scan",
+        dest="force_page_scan",
+        action="store_true",
+        help="EXPERIMENTAL (UNTESTED on hardware): keep page scan enabled "
+        "while a link is up, so a SECOND device can connect TO the radio. "
+        "With --no-kick the radio no longer evicts the first device, but "
+        "it still answers no incoming pages once connected (btmon: 'Page "
+        "Timeout'); the stack only re-enables page scan when "
+        "is_1t2_connection() is false and the vendor's 1-to-2 scan logic "
+        "in multi_bd.c is compiled EMPTY. NOP-ing the page-scan disable "
+        "branch at 0x01E18B0E turns every 'disable' into an 'enable'. "
+        "Option A2 of Findings ch. 26 SS26.9: combine with --no-kick and "
+        "--conn-num=2. SIDE EFFECT: the radio is always connectable.",
+    )
+    ap.add_argument(
         "--sectors",
         metavar="PREFIX",
         help="also export the changed 4 KiB flash sectors as PREFIX_<addr>.bin "
@@ -1793,7 +1851,7 @@ def main():
     validate_pf_combo(a7, a8)
 
     PATCHES = build_patches(args.bluetooth_mode, a7, a8, args.conn_num,
-                            args.no_kick)
+                            args.no_kick, args.force_page_scan)
 
     raw, app, app_start = load_app(args.src)
     print("source: %s (%d bytes)" % (args.src, len(raw)))
@@ -1806,6 +1864,8 @@ def main():
         extra += " --conn-num=%d (EXPERIMENTAL)" % args.conn_num
     if args.no_kick:
         extra += " --no-kick (EXPERIMENTAL)"
+    if args.force_page_scan:
+        extra += " --force-page-scan (EXPERIMENTAL)"
     print("configuration: --bluetooth-mode %d --PTT=%s --PTT2=%s --OD-PTT=%s%s\n"
           % (args.bluetooth_mode, ptt_action, a7, a8, extra))
 
@@ -1830,6 +1890,8 @@ def main():
         wanted += ["connum"]
     if args.no_kick:
         wanted += ["nokick"]
+    if args.force_page_scan:
+        wanted += ["pagescan"]
     wanted = list(dict.fromkeys(wanted))
     if ({"pfbody7", "pfbody8", "pfrelease", "pflabels"} & set(wanted)
             and PF_LITERAL_PATCHES & set(wanted)):
