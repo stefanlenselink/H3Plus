@@ -516,3 +516,14 @@ whose button triggers PTT via HFP hook events).
 > `0x01E22890` case 5 → `hci_disconnect_cmd` `0x01E074DE`, reason 19); the stack itself
 > never evicts — it just can't track a second link. A 4-byte kick-NOP experiment and the
 > full options analysis are in [ch. 26 §26.7](26-bluetooth-9-eviction-decision.md#267--options-for-getting-multipoint-working).
+
+> **CORRECTION 2026-10-06 — claim 3 does NOT apply to our firmware.** The
+> `[1 x conn_info]` dimension is the **public SDK default build** only. Verification
+> against our own image ([ch. 27 §27.2](27-firmware-2slot-stack-controller-wall.md#272--our-firmwares-stack-data-model-verified-in-image))
+> shows the vendor compiled the host stack with **2 `conn_info` slots** (RAM
+> `0x1A5B8`, stride `0x1C`, end `0x1A5F0`), **2 `rfcomm_multiplexer_t`**, 6
+> `rfcomm_service_t`, 6 `rfcomm_channel_t`, 20 `l2cap_channel_t` (pool `malloc(1900)`
+> vs the SDK's 600 B). The host layer is provisioned for two devices; the second-link
+> teardown originates in the **prebuilt controller library**
+> ([ch. 27 §27.7](27-firmware-2slot-stack-controller-wall.md#277--verdict-the-wall-is-the-prebuilt-controller-library)).
+> Claims 1, 2 and 4 stand.

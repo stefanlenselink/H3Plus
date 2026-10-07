@@ -184,9 +184,9 @@ PTT unaffected, no `gp+0xC7` flag leak) · **ecosystem sweep: right SDK found (`
 `cpu/br23` = AC635N), `.ufw` table located, official objdump validated our disassembler
 (12,786 targets, 0 mismatches), stack API proves 1-to-2 multipoint** (ch. 24) ·
 **multipoint gate `user_ctrl_conn_num` located + `--conn-num=2` patch built**
-(ch. 22 §9B.10.2) — **hardware-tested 2026-10-03: eviction persists; the real cap is
-the stack's `[1 x conn_info]` data model, multipoint is NOT reachable by binary
-patch** (ch. 22 §9B.11) · **eviction decision located 2026-10-04** (ch. 26): app-level
+(ch. 22 §9B.10.2) — **hardware-tested 2026-10-03: eviction persists** (ch. 22 §9B.11 —
+its "`[1 x conn_info]` data model" root cause was **corrected 2026-10-06**: our build
+has 2 conn slots; the wall is the controller library, ch. 27) · **eviction decision located 2026-10-04** (ch. 26): app-level
 kick `0x01E5B22A` posts cmd 5 to the controller-queue relay `0x01E22890` (sole
 HCI-Disconnect executor `0x01E074DE`, reason 19); the stack never evicts; 4-byte
 kick-NOP experiment + options analysis in ch. 26 §26.7.
@@ -236,8 +236,23 @@ Open (in priority order):
    refused, next gate = app single-device SPP/profile binding (struct `0x102F0`).
    (Side effects to expect: BT-off/menu-disconnect no longer release the link;
    radio always connectable.)
-   Multipoint otherwise needs a vendor multipoint library, a machine-code data
-   model transplant (research-grade), or a single-device workaround (one device
+   **COURSE CORRECTION 2026-10-06 (ch. 27): the firmware already has 2 `conn_info`
+   slots** — stride `0x1C`, array `0x1A5B8`–`0x1A5F0`, inused bit29 of word `+0xE`;
+   pools vendor-widened (2 `rfcomm_multiplexer`s, 18 l2cap_service, 20 l2cap_channel,
+   6 rfcomm_service/channel vs SDK defaults 4/5/1/3/3). §9B.11's `[1 x]` was the SDK
+   default layout, not ours — **widening `conn_info` is unnecessary**. All 13 HCI-
+   Disconnect (0x406) sites enumerated: kick (dead under `--no-kick`), reason-0xF
+   timeout path, wrapper `0x01E07B08` (reason-0x13 callers are explicit disconnect
+   commands only). Round-2 capture decode (`btmon -r`): second link dies at LL level
+   ~644 ms after the page (Connect Complete 0x13, no success-then-disconnect) — the
+   radio's **controller** terminates it; the host Connection Request handler
+   (`FUN_01e19e44` case 4) always accepts incoming ACLs (role 1, or 0xAA if
+   `DAT_0000c02b & 8`). **The wall is the prebuilt controller library.**
+   **NEXT: experiments E1–E5 (ch. 27 §27.8)** — E2 (headset + outgoing page to
+   TID-PTT) is the cheapest decisive test; E4 = force role 0xAA in the accept
+   (2-byte patch) if E2 shows outgoing pages also die. Remaining routes if the
+   controller is hard-limited: vendor multipoint controller lib, SDK rebuild
+   (ch. 25 decompile⇒compile route), or single-device workaround (one device
    carrying SPP+HFP, e.g. custom ESP32 combo device — profile coexistence proven).
 3. ~~Ghidra + quarkslab/ghidra-jieli on Linux~~ ✅ **HARDWARE-VALIDATED 2026-10-03**
    (ch. 25): Ghidra 12.1.4 + ghidra-jieli (unmodified) decompiles

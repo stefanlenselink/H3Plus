@@ -339,7 +339,21 @@ server) should now get an ACL + SPP while the headset survives. If the ACL comes
 up but SPP is refused, the next gate is the app's single-device SPP/profile
 binding (struct `0x102F0`), which is patchable with the same direct-rewrite model.
 
-## §26.11 — Option A2 hardware round 2: page scan **works**; the wall is `conn_info` (2026-10-06)
+## §26.11 — Option A2 hardware round 2: page scan **works**; second link dies at the controller (2026-10-06)
+
+> **CORRECTION 2026-10-06 (same day, later session) — two claims below are wrong.**
+> (1) "opcode `0x406` appears exactly once" is false: 13 literal sites; the real HCI
+> Disconnect senders are `0x01E074EE` (kick, dead under `--no-kick`), `0x01E07606`
+> (reason 0x0F, L2CAP timeout) and the wrapper `0x01E07B08(handle, reason)` — whose
+> 0x13 caller `0x01E178B2` is **action-driven only** (disconnect-current / dispatcher
+> cmd 8/10 by address). (2) "the second ACL has no `conn_info` slot" is false for our
+> build: the vendor compiled **2 slots** (+2 RFCOMM muxes, 6 svc, 6 ch). The host
+> always accepts incoming ACLs (no connected-gate in the case-4 handler). The
+> teardown is issued by the **prebuilt controller library** — full evidence, capture
+> decode and the experiment matrix in
+> [ch. 27](27-firmware-2slot-stack-controller-wall.md). "Option B (widen `conn_info`)"
+> is therefore moot; the remaining binary experiments are controller-side (role
+> parameter / config bytes), see ch. 27 §27.8.
 
 Image: `--PTT=BT-PTT --PTT2=BT-PTT2 --OD-PTT=PTT --conn-num=2 --no-kick
 --force-page-scan` (full `.bin` from the user's dump). Capture:
