@@ -375,6 +375,83 @@ if cp.returncode == 0:
        and g(a, P.PAGESCAN_VA, 4) == b"\x00\x00\x00\x00",
        "Option A2 carries kick-NOP + conn_num=2 + page-scan NOP")
 
+# --- --force-role-keep (multipoint experiment E4, ch.27 SS27.8) -------------
+rk = os.path.join(OUTDIR, "v_rolekeep.bin")
+cp = run(SRC, rk, "--only", "rolekeep", "--force-role-keep")
+ck(cp.returncode == 0, "--force-role-keep build")
+if cp.returncode == 0:
+    a = dec(rk)
+    ck(g(a, P.ROLEKEEP_VA, 10) == bytes.fromhex("c0ea4502000000000000"),
+       "ACL role test -> goto 0x01E1A4C8 (accept with role 0xAA)")
+    d = [i for i in range(len(stock)) if stock[i] != a[i]]
+    roff = P.va_to_off(P.ROLEKEEP_VA)
+    ck(len(d) == 9 and all(roff <= i < roff + 10 for i in d),
+       "rolekeep patch touches only its site, 9 differing bytes (%s)"
+       % [hex(x) for x in d])
+    cp = run(rk, "--show", "--force-role-keep")
+    rkline = [l for l in cp.stdout.splitlines() if l.startswith("rolekeep")]
+    ck(cp.returncode == 0 and "UNKNOWN" not in cp.stdout
+       and len(rkline) == 1 and "TARGET" in rkline[0],
+       "--show on patched rolekeep clean")
+    cp2 = run(rk, rk + ".2", "--only", "rolekeep", "--force-role-keep")
+    ck(cp2.returncode == 0 and "Nothing to do" in cp2.stdout,
+       "rolekeep idempotent")
+    cp3 = run(rk, os.path.join(OUTDIR, "v_rkback.bin"), "--only", "rolekeep")
+    ck(cp3.returncode == 0 and dec(os.path.join(OUTDIR, "v_rkback.bin"))
+       [roff:roff + 10] == bytes.fromhex("50ee970161ff08004202"),
+       "rolekeep reverts to stock")
+# E4 combo: Option A2 trio + role-keep
+ce4 = os.path.join(OUTDIR, "v_e4.bin")
+cp = run(SRC, ce4, "--no-kick", "--conn-num=2", "--force-page-scan",
+         "--force-role-keep", "--PTT=BT-PTT", "--PTT2=BT-PTT2", "--OD-PTT=PTT")
+ck(cp.returncode == 0, "E4 combo build (Option A2 + --force-role-keep)")
+if cp.returncode == 0:
+    a = dec(ce4)
+    ck(g(a, P.NOKICK_VA, 4) == b"\x40\x23\x80\x00"
+       and g(a, P.CONN_NUM_VA, 2) == b"\x31\x25"
+       and g(a, P.PAGESCAN_VA, 4) == b"\x00\x00\x00\x00"
+       and g(a, P.ROLEKEEP_VA, 10) == bytes.fromhex("c0ea4502000000000000"),
+       "E4 combo carries kick-NOP + conn_num=2 + page-scan NOP + role-keep")
+
+# --- --no-disconnect-13 (multipoint experiment E6, ch.27 SS27.9) ------------
+d13 = os.path.join(OUTDIR, "v_disc13.bin")
+cp = run(SRC, d13, "--only", "disc13", "--no-disconnect-13")
+ck(cp.returncode == 0, "--no-disconnect-13 build")
+if cp.returncode == 0:
+    a = dec(d13)
+    ck(g(a, P.DISC13_VA, 8) == bytes.fromhex("0000000040165504"),
+       "disconnect(handle,0x13) call -> nop;nop, falls through to mov r0,r4")
+    d = [i for i in range(len(stock)) if stock[i] != a[i]]
+    doff = P.va_to_off(P.DISC13_VA)
+    ck(len(d) == 4 and all(doff <= i < doff + 4 for i in d),
+       "disc13 patch touches exactly 4 bytes (%s)" % [hex(x) for x in d])
+    cp = run(d13, "--show", "--no-disconnect-13")
+    d13line = [l for l in cp.stdout.splitlines() if l.startswith("disc13")]
+    ck(cp.returncode == 0 and "UNKNOWN" not in cp.stdout
+       and len(d13line) == 1 and "TARGET" in d13line[0],
+       "--show on patched disc13 clean")
+    cp2 = run(d13, d13 + ".2", "--only", "disc13", "--no-disconnect-13")
+    ck(cp2.returncode == 0 and "Nothing to do" in cp2.stdout,
+       "disc13 idempotent")
+    cp3 = run(d13, os.path.join(OUTDIR, "v_d13back.bin"), "--only", "disc13")
+    ck(cp3.returncode == 0 and dec(os.path.join(OUTDIR, "v_d13back.bin"))
+       [doff:doff + 4] == bytes.fromhex("bfea1b81"),
+       "disc13 reverts to stock")
+# E6 combo: full multipoint recipe + disc13 NOP
+ce6 = os.path.join(OUTDIR, "v_e6.bin")
+cp = run(SRC, ce6, "--no-kick", "--conn-num=2", "--force-page-scan",
+         "--force-role-keep", "--no-disconnect-13", "--PTT=BT-PTT",
+         "--PTT2=BT-PTT2", "--OD-PTT=PTT")
+ck(cp.returncode == 0, "E6 combo build (E4 + --no-disconnect-13)")
+if cp.returncode == 0:
+    a = dec(ce6)
+    ck(g(a, P.NOKICK_VA, 4) == b"\x40\x23\x80\x00"
+       and g(a, P.CONN_NUM_VA, 2) == b"\x31\x25"
+       and g(a, P.PAGESCAN_VA, 4) == b"\x00\x00\x00\x00"
+       and g(a, P.ROLEKEEP_VA, 10) == bytes.fromhex("c0ea4502000000000000")
+       and g(a, P.DISC13_VA, 4) == b"\x00\x00\x00\x00",
+       "E6 combo carries all five multipoint patches")
+
 # --- cleanup ----------------------------------------------------------------
 if not fail and not KEEP:
     shutil.rmtree(OUTDIR)

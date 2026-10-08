@@ -90,6 +90,16 @@ CASES = [
     ("nokick",          ["--no-kick"], 0),
     ("nokick_cn",       ["--no-kick", "--conn-num=2"], 0),
     ("nk_alias",        ["--NO-KICK"], 0),
+    # multipoint experiment E4: role-keep accept, alone and in the full recipe
+    ("rolekeep",        ["--force-role-keep"], 0),
+    ("rolekeep_a2",     ["--no-kick", "--conn-num=2", "--force-page-scan",
+                         "--force-role-keep"], 0),
+    ("rk_alias",        ["--FORCE-ROLE-KEEP"], 0),
+    # multipoint experiment E6: app 0x13 disconnect NOP, alone and full recipe
+    ("disc13",          ["--no-disconnect-13"], 0),
+    ("disc13_e6",       ["--no-kick", "--conn-num=2", "--force-page-scan",
+                         "--force-role-keep", "--no-disconnect-13"], 0),
+    ("d13_alias",       ["--NO-DISCONNECT-13"], 0),
 ]
 
 RE_BYTES = re.compile(r"plaintext bytes changed: (\d+)")
@@ -167,6 +177,14 @@ def main():
     # --NO-KICK must equal the canonical --no-kick build
     identical(os.path.join(OUTDIR, "nk_alias.bin"),
               os.path.join(OUTDIR, "nokick.bin"), "--NO-KICK", "--no-kick")
+    # --FORCE-ROLE-KEEP must equal the canonical --force-role-keep build
+    identical(os.path.join(OUTDIR, "rk_alias.bin"),
+              os.path.join(OUTDIR, "rolekeep.bin"),
+              "--FORCE-ROLE-KEEP", "--force-role-keep")
+    # --NO-DISCONNECT-13 must equal the canonical --no-disconnect-13 build
+    identical(os.path.join(OUTDIR, "d13_alias.bin"),
+              os.path.join(OUTDIR, "disc13.bin"),
+              "--NO-DISCONNECT-13", "--no-disconnect-13")
     # --show must run clean on a kick-NOP'd image
     exitcode, out = run([os.path.join(OUTDIR, "nokick.bin"), "--show",
                          "--no-kick"])
@@ -174,6 +192,22 @@ def main():
         print("--show on nokick clean OK")
     else:
         print("--show on nokick -> FAIL")
+        fail += 1
+    # --show must run clean on a role-keep image
+    exitcode, out = run([os.path.join(OUTDIR, "rolekeep.bin"), "--show",
+                         "--force-role-keep"])
+    if exitcode == 0 and "UNKNOWN" not in out.upper():
+        print("--show on rolekeep clean OK")
+    else:
+        print("--show on rolekeep -> FAIL")
+        fail += 1
+    # --show must run clean on a disc13 image
+    exitcode, out = run([os.path.join(OUTDIR, "disc13.bin"), "--show",
+                         "--no-disconnect-13"])
+    if exitcode == 0 and "UNKNOWN" not in out.upper():
+        print("--show on disc13 clean OK")
+    else:
+        print("--show on disc13 -> FAIL")
         fail += 1
     # --show must run clean on a patched image
     exitcode, out = run([os.path.join(OUTDIR, "c6_odptt_btptt.bin"), "--show",

@@ -137,7 +137,7 @@ KEY ACTIONS  (--PTT / --PTT2 / --OD-PTT, Findings.md 9A.41-9A.48)
                +SPP=R command); the radio's own mic is used when no headset
                is linked
       BT-PTT2  like BT-PTT but TX forced to VFO B - the SECOND channel
-               (menu shows "BT PTT2").  [UNTESTED on hardware]
+               (menu shows "BT PTT2").  [HARDWARE-CONFIRMED 2026-09-30, ch. 23 SS9C.8]
       OD-PTT   stock menu option: "OD PTT" one-key duplex
 
     --PTT=A      what the radio's MAIN PTT key does.
@@ -232,7 +232,8 @@ KEY ACTIONS  (--PTT / --PTT2 / --OD-PTT, Findings.md 9A.41-9A.48)
     to the existing Russian "Net" string at 0x01E92010 (same word,
     different capitalisation). Labels are changed in all nine language
     lists.
-    [UNTESTED]
+    [Labels verified in all 9 language lists statically (ch. 23 SS9C.9)
+    and on the display 2026-10-01.]
 
     New menu entries cannot be ADDED, and other options (Weather, Alarm,
     ...) cannot be taken over as a PTT: only values 7/8 are hold keys in
@@ -279,7 +280,7 @@ USAGE
     # menu option OD PTT becomes "BT PTT", PTT2 kept
     python tools/patch_h3plus_firmware_bluetooth.py Dumps/dump_internal.bin out.bin --OD-PTT=BT-PTT
 
-    # menu option PTT2 becomes "BT PTT2": BT headset mic, TX on VFO B (UNTESTED)
+    # menu option PTT2 becomes "BT PTT2": BT headset mic, TX on VFO B (HW-confirmed)
     python tools/patch_h3plus_firmware_bluetooth.py Dumps/dump_internal.bin out.bin --PTT2=BT-PTT2
 
     # both menu options replaced (the classic combo)
@@ -576,7 +577,8 @@ KEYCODE_PATCHES = {
 # 0x01E75E82) and the BT release goes to 0x01E75E8C. Dropping the native
 # `b[r5+0xEA]` test is safe because TXstop (0x01E5A138) self-guards on
 # b[0x102F0+0x24C] - it returns immediately when no TX is pending.
-# [UNTESTED on hardware]
+# [HARDWARE-CONFIRMED 2026-09-30: --PTT=BT-PTT --PTT2=BT-PTT2 --OD-PTT=PTT
+# works with and without a headset, ch. 23 SS9C.8]
 #
 # None of the release sub-addresses (E80/E82/E8C/E92/E96) is referenced
 # from anywhere else in the image (checked 32-bit and /2 forms), and the
@@ -736,7 +738,7 @@ def _pf_release(a7, a8):
 # verified): press bodies run with r4 = gp (0x102F0); the cave handler
 # runs in the 0x2A-handler context with r7 = gp; the release executor
 # runs with r0 = the released PF number and r4 NOT gp, so the release
-# helper loads gp itself. UNTESTED on hardware.
+# helper loads gp itself. HW-confirmed 2026-09-30 (ch. 23 SS9C.8).
 CAVE_VA = 0x01EA76DE          # 364-byte ALLZERO code cave (v44/v45/v50)
 CAVE_LEN = 68                 # bytes of the cave this tool fills
 FLAG_OFF = 0xC7               # gp+0xC7: force-VFO-B flag (verified unused)
@@ -843,9 +845,14 @@ PF_TBB_78_SWAPPED = bytes.fromhex("332e")
 # at 0x01E182DC, i.e. conn_num = 1. The JieLi API (avctp_user.h) documents
 # it as "number of BT connections supported; controls discoverability and
 # the reconnect flow". `r1 |= 32` (byte 0x25) asks for conn_num = 2.
-# UNTESTED on hardware: the stack may then hold two ACL links (headset HFP
-# + TID-PTT SPP), while the app still models ONE remote device (RAM 0x102F0)
-# -- expect last-connected-wins for audio/mic routing.
+# conn_num = 2 ALONE was hardware-tested 2026-10-03 and is NOT sufficient
+# (eviction persisted - ch. 22 SS9B.11: the reader is scan-management only
+# and the app keeps one device struct). It is, however, a member of the
+# E6 combo that IS hardware-confirmed 2026-10-08 (ch. 27 SS27.11): with
+# --no-kick --force-page-scan --force-role-keep --no-disconnect-13 the radio
+# holds two ACL links (incumbent SPP + radio-initiated second join) and SPP
+# keys work with both devices up. The app still models ONE remote device
+# (RAM 0x102F0), so audio/mic routing follows the current-device struct.
 # --------------------------------------------------------------------------
 CONN_NUM_VA = 0x01E182DC
 CONN_NUM_CTX_VA = 0x01E182CC
@@ -854,7 +861,7 @@ CONN_NUM_CTX = bytes.fromhex(
 CONN_NUM_STATES = {"1": bytes.fromhex("3124"), "2": bytes.fromhex("3125")}
 CONN_NUM_LABELS = {
     "1": "conn_num = 1 (stock: single BT device)",
-    "2": "conn_num = 2 (multipoint: two BT devices, UNTESTED)",
+    "2": "conn_num = 2 (multipoint: two BT devices; E6 combo, HW-confirmed)",
 }
 
 # --------------------------------------------------------------------------
@@ -872,8 +879,9 @@ CONN_NUM_LABELS = {
 # EFFECTS: turning Bluetooth off and the menu "disconnect" no longer
 # release the link (power-cycle instead), and the stack still owns ONE
 # conn_info slot, so a second device joins as a passive "ghost link" -
-# whether its SPP keys reach the app is the experiment. UNTESTED on
-# hardware. Option A = this flag combined with --conn-num=2.
+# whether its SPP keys reach the app is the experiment. HW round 1
+# 2026-10-05 (ch. 26 SS26.9): kick-NOP CONFIRMED - incoming attempts no
+# longer evict the incumbent. Option A = this flag combined with --conn-num=2.
 # --------------------------------------------------------------------------
 NOKICK_VA = 0x01E5B22A
 NOKICK_CTX_VA = NOKICK_VA
@@ -884,7 +892,7 @@ NOKICK_STATES = {
 }
 NOKICK_LABELS = {
     "stock": "kick active: disconnects the current device (stock)",
-    "disabled": "r0 = 3; rts (kick disabled: never disconnects, UNTESTED)",
+    "disabled": "r0 = 3; rts (kick disabled: never disconnects; HW-confirmed)",
 }
 
 # --------------------------------------------------------------------------
@@ -901,7 +909,10 @@ NOKICK_LABELS = {
 # instructions at 0x01E18B0E (`if (r0 != 0) goto keep; r4 = r2` i.e.
 # cleared). NOP-ing both makes EVERY call enable page scan, so the
 # stack's post-connect "disable" turns it ON instead and the radio stays
-# connectable while a headset holds HFP. UNTESTED on hardware.
+# connectable while a headset holds HFP. HW-observed 2026-10-07 (E4 round,
+# ch. 27): incoming pages are ANSWERED while connected (the earlier
+# "Page Timeout" refuses are gone; the link then died at controller level
+# for the INCOMING topology - see ch. 27 SS27.11: outgoing joins work).
 # --------------------------------------------------------------------------
 PAGESCAN_VA = 0x01E18B0E
 PAGESCAN_CTX_VA = PAGESCAN_VA
@@ -912,7 +923,93 @@ PAGESCAN_STATES = {
 }
 PAGESCAN_LABELS = {
     "stock": "page scan follows stack policy (off while connected)",
-    "forced": "nop; nop (page scan always enabled, UNTESTED)",
+    "forced": "nop; nop (page scan always enabled; pages answered while connected)",
+}
+
+# --------------------------------------------------------------------------
+# --force-role-keep: HCI Accept Connection Request role -> keep-role
+# (multipoint experiment E4, Findings ch. 27 SS27.8). The stack task event
+# switch (0x01E19E44, case 4 = Connection Request) accepts incoming ACL
+# links; the role parameter is chosen by a stack-config flag:
+#
+#     01E1A03A  lb.z r0,[r9 + 0x107]     ; r0 = b[0xC02B] (r9 = 0xBF24,
+#                                           _stack_config base, ch.22 SS9B.10.2)
+#     01E1A03E  jmnz r0,#0x8,0x01e1a4c8  ; bit 3 set -> role 0xAA path
+#     01E1A044  mov r1,#0x1              ; else role = 1 (become master)
+#     ...
+#     01E1A4C8  mov r1,#0xaa             ; vendor "keep role"
+#     01E1A4CA  mov r0,r5 ; call 0x01e086f2  ; HCI Accept Connection Request
+#
+# The config blob @0x01EC2064 initialises b[0xC02B] = 0x00, so stock accepts
+# every incoming ACL with role 1 (become master). The round-2 btmon capture
+# (ch. 27) shows a second link paged while a headset holds HFP dies at the
+# LL level ~644 ms after the page (Connect Complete 0x13) - the controller
+# terminates it, plausibly over a role conflict (the radio is already master
+# on the headset link). Replacing the config test with an unconditional goto
+# to the 0xAA load makes the radio accept the second link with keep-role.
+# Only the ACL path reaches this site (SCO / eSCO / reject branch away
+# earlier), so SCO setup keeps role 1; registers are identical at the jump.
+# HW-TESTED 2026-10-07: FAILED - the role parameter is not the trigger. With the
+# full E4 build the second incoming link still dies at the LL level ~722 ms after
+# the page (Connect Complete 0x13; same signature as the A2 round-2 capture,
+# ~644 ms) - and the PC's page even offered "Role switch: Allow peripheral", so
+# the stock role-1 accept was permitted too. Also observed: a radio-initiated
+# headset join killed the incumbent PC SPP link despite --no-kick (a second
+# eviction path beyond the NOPed kick - see ch. 27 SS27.8 for the E3 follow-up).
+# Combine with --conn-num=2 --no-kick --force-page-scan.
+# --------------------------------------------------------------------------
+ROLEKEEP_VA = 0x01E1A03A
+ROLEKEEP_CTX_VA = ROLEKEEP_VA
+ROLEKEEP_CTX = bytes.fromhex("50ee 9701 61ff 0800 4202")
+ROLEKEEP_STATES = {
+    "stock": bytes.fromhex("50ee970161ff08004202"),
+    "forced": bytes.fromhex("c0ea4502000000000000"),  # goto 0x01E1A4C8; nop x3
+}
+ROLEKEEP_LABELS = {
+    "stock": "ACL accept role from config (stock: role 1, become master)",
+    "forced": "goto role-0xAA load (accept keep-role; E4 FAILED 2026-10-07, harmless in combo)",
+}
+
+# --------------------------------------------------------------------------
+# --no-disconnect-13: disable the app's reason-0x13 disconnect executor
+# (multipoint experiment E6, Findings ch. 27 SS27.9). E3 (hardware 2026-10-08,
+# btmon capture): with --no-kick active, a RADIO-INITIATED headset join still
+# killed the incumbent PC SPP link - but GRACEFULLY: L2CAP Disconnection
+# Request/Response on the RFCOMM CIDs, then HCI Disconnect Complete reason
+# 0x13 (Remote User Terminated). That is the app's host stack, not the
+# controller. The executor is the call at 0x01E178CE inside 0x01E178B2
+# (find connection via 0x01E17420 modes 0/2, then disconnect(handle, 0x13)
+# through the wrapper at 0x01E07B08). Its callers are every app-level
+# "disconnect current device" route: the BT API dispatcher 0x01E1792E case
+# 0x4A (callers: BT mode-set 0x01E60188 and the BT task UI state machine
+# 0x01E61E22 - the "connect selected device" flow that posts 0xc,0xe,0x12,
+# 5,0x4a) and the stack command dispatcher 0x01E21AF8 cases 8/10 (disconnect
+# by address). NOP-ing this one call silences ALL of them; the function then
+# falls through to `mov r0,r4` (r4 = 0) and returns "disconnected", so every
+# caller behaves as if the teardown succeeded. The kick route (cmd 5 ->
+# 0x01E074DE, also reason 0x13) is separate and already covered by --no-kick.
+# EXPECT SIDE EFFECTS: menu "disconnect" and explicit disconnect commands no
+# longer release a link (power-cycle instead); the app's device struct and
+# the stack's conn_info slot are NOT freed, so app state diverges from the
+# link state - whether the radio can then page a SECOND device while the
+# first link stays up (and whether the controller permits it) is exactly the
+# E6 experiment. Combine with --conn-num=2 --no-kick --force-page-scan.
+# HW-CONFIRMED 2026-10-08 (E6, ch. 27 SS27.11): the incumbent PC SPP link
+# SURVIVES a radio-initiated headset join; both links stay up and SPP PTT
+# works. Side effect: after a second device joins, the radio's AT+MPTT
+# squelch notifications arrive malformed on the first device's SPP channel
+# (cr-bit flipped, "+MP" fragments); the +SPP=P/R echo path is unaffected.
+# --------------------------------------------------------------------------
+DISC13_VA = 0x01E178CE
+DISC13_CTX_VA = DISC13_VA
+DISC13_CTX = bytes.fromhex("bfea 1b81 4016 5504".replace(" ", ""))
+DISC13_STATES = {
+    "stock": bytes.fromhex("bfea1b81"),
+    "disabled": bytes.fromhex("00000000"),  # nop; nop -> never disconnects
+}
+DISC13_LABELS = {
+    "stock": "call disconnect(handle, 0x13) (app teardown active)",
+    "disabled": "nop; nop (app 0x13 disconnects disabled; E6 HW-confirmed)",
 }
 
 # Kept for tools/verify_actions.py: the native body addresses.
@@ -1152,7 +1249,8 @@ def _ctx_variant_fn(va, ctx_va, ctx_base):
 
 
 def build_patches(duplex_mode=4, ptt2_action="PTT2", odptt_action="OD-PTT",
-                  conn_num=None, no_kick=False, force_page_scan=False):
+                  conn_num=None, no_kick=False, force_page_scan=False,
+                  force_role_keep=False, no_disconnect_13=False):
     """Return the patch table, with the `duplex` patch's target selected by
     `duplex_mode` (see DUPLEX_LABELS) and the `pflabels` multi-patch built
     for the (--PTT2, --OD-PTT) action pair (see PF_COMBO_PATCHES). The
@@ -1162,8 +1260,10 @@ def build_patches(duplex_mode=4, ptt2_action="PTT2", odptt_action="OD-PTT",
     target of the experimental stack connection-count gate (see CONN_NUM_VA);
     `no_kick` disables the app's disconnect kick (see NOKICK_VA);
     `force_page_scan` keeps page scan enabled while connected (see
-    PAGESCAN_VA). All entries are always present so --show recognises all
-    states."""
+    PAGESCAN_VA); `force_role_keep` forces the ACL accept role to keep-role
+    (see ROLEKEEP_VA); `no_disconnect_13` disables the app's reason-0x13
+    disconnect executor (see DISC13_VA). All entries are always present so
+    --show recognises all states."""
     if duplex_mode not in DUPLEX_STATES:
         raise SystemExit("--bluetooth-mode must be one of %s" % sorted(DUPLEX_STATES))
     validate_pf_combo(ptt2_action, odptt_action)
@@ -1229,6 +1329,32 @@ def build_patches(duplex_mode=4, ptt2_action="PTT2", odptt_action="OD-PTT",
         "ctx_base": PAGESCAN_CTX,
         "ctx_variant": _ctx_variant_fn(PAGESCAN_VA, PAGESCAN_CTX_VA,
                                        PAGESCAN_CTX),
+    }
+    rk = "forced" if force_role_keep else "stock"
+    patches["rolekeep"] = {
+        "desc": "ACL accept role test (0x01E1A03A) -> %s" % rk,
+        "va": ROLEKEEP_VA,
+        "new": ROLEKEEP_STATES[rk],
+        "states": ROLEKEEP_STATES,
+        "labels": ROLEKEEP_LABELS,
+        "target": rk,
+        "ctx_va": ROLEKEEP_CTX_VA,
+        "ctx_base": ROLEKEEP_CTX,
+        "ctx_variant": _ctx_variant_fn(ROLEKEEP_VA, ROLEKEEP_CTX_VA,
+                                       ROLEKEEP_CTX),
+    }
+    d13 = "disabled" if no_disconnect_13 else "stock"
+    patches["disc13"] = {
+        "desc": "app disconnect executor (0x01E178CE) -> %s" % d13,
+        "va": DISC13_VA,
+        "new": DISC13_STATES[d13],
+        "states": DISC13_STATES,
+        "labels": DISC13_LABELS,
+        "target": d13,
+        "ctx_va": DISC13_CTX_VA,
+        "ctx_base": DISC13_CTX,
+        "ctx_variant": _ctx_variant_fn(DISC13_VA, DISC13_CTX_VA,
+                                       DISC13_CTX),
     }
     for name, (va, ctx_va, ctx_hex, native, spp, what) in KEYCODE_PATCHES.items():
         states = {"native": bytes([0x48, native]), "spp": bytes([0x48, spp])}
@@ -1758,7 +1884,7 @@ def main():
         "  PTT      TX on the current VFO, radio mic (menu shows \"PTT\")\n"
         "  BT-PTT   transmit the Bluetooth headset's mic (menu shows \"BT PTT\")\n"
         "  BT-PTT2  Bluetooth headset's mic, TX forced to VFO B / the second\n"
-        "           channel (menu shows \"BT PTT2\", UNTESTED on hardware)\n"
+        "           channel (menu shows \"BT PTT2\", HW-confirmed 2026-09-30)\n"
         "  OD-PTT   stock one-key duplex (menu shows \"OD PTT\")\n"
         "  Any action works here as long as --OD-PTT differs from it.",
     )
@@ -1773,7 +1899,7 @@ def main():
         "  OD-PTT   stock one-key duplex\n"
         "  BT-PTT   transmit the Bluetooth headset's mic (menu shows \"BT PTT\")\n"
         "  BT-PTT2  Bluetooth headset's mic, TX forced to VFO B / the second\n"
-        "           channel (menu shows \"BT PTT2\", UNTESTED on hardware)\n"
+        "           channel (menu shows \"BT PTT2\", HW-confirmed 2026-09-30)\n"
         "  PTT      TX on the current VFO, radio mic (menu shows \"PTT\")\n"
         "  PTT2     TX forced to VFO B (menu shows \"PTT2\")\n"
         "  Any action works here as long as --PTT2 differs from it.\n"
@@ -1786,7 +1912,8 @@ def main():
         type=int,
         choices=(1, 2),
         default=None,
-        help="EXPERIMENTAL (UNTESTED on hardware): number of Bluetooth "
+        help="MULTIPOINT (member of the HW-CONFIRMED E6 combo, 2026-10-08, "
+        "ch. 27 SS27.11): number of Bluetooth "
         "connections the stack maintains. Stock is 1: a second device that "
         "connects EVICTS the first (hardware-confirmed, ch. 22 SS9B.6.1). "
         "2 rewrites the app's __set_user_ctrl_conn_num(1) init override to "
@@ -1799,7 +1926,8 @@ def main():
         "--no-kick",
         dest="no_kick",
         action="store_true",
-        help="EXPERIMENTAL (UNTESTED on hardware): disable the app's "
+        help="MULTIPOINT (kick-NOP HW-confirmed 2026-10-05; E6 combo "
+        "2026-10-08): disable the app's "
         "disconnect kick. The routine at 0x01E5B22A is the ONLY code that "
         "disconnects a BT device, and the app runs it before paging a "
         "second one - which is why a second device always evicts the "
@@ -1817,7 +1945,8 @@ def main():
         "--force-page-scan",
         dest="force_page_scan",
         action="store_true",
-        help="EXPERIMENTAL (UNTESTED on hardware): keep page scan enabled "
+        help="MULTIPOINT (pages answered while connected, HW-observed "
+        "2026-10-07; E6 combo 2026-10-08): keep page scan enabled "
         "while a link is up, so a SECOND device can connect TO the radio. "
         "With --no-kick the radio no longer evicts the first device, but "
         "it still answers no incoming pages once connected (btmon: 'Page "
@@ -1827,6 +1956,45 @@ def main():
         "branch at 0x01E18B0E turns every 'disable' into an 'enable'. "
         "Option A2 of Findings ch. 26 SS26.9: combine with --no-kick and "
         "--conn-num=2. SIDE EFFECT: the radio is always connectable.",
+    )
+    ap.add_argument(
+        "--force-role-keep",
+        dest="force_role_keep",
+        action="store_true",
+        help="MULTIPOINT (experiment E4: FAILED standalone 2026-10-07 - role "
+        "is not the trigger - but harmless in the E6 combo): accept incoming ACL "
+        "links with the vendor keep-role parameter (0xAA) instead of the "
+        "stock role 1 (become master). The stack task always accepts "
+        "incoming ACLs (0x01E19E44 case 4); the role comes from a "
+        "stack-config flag that is clear in this firmware, so the radio "
+        "tries to become master of every link. When a headset already "
+        "holds HFP the controller tears the second link down at the LL "
+        "level ~644 ms after the page (btmon Connect Complete 0x13, ch. "
+        "27); forcing keep-role is experiment E4 of the ch. 27 SS27.8 "
+        "matrix - combine with --conn-num=2 --no-kick --force-page-scan. "
+        "SCO setup is unaffected (it branches away before the patched "
+        "test).",
+    )
+    ap.add_argument(
+        "--no-disconnect-13",
+        dest="no_disconnect_13",
+        action="store_true",
+        help="MULTIPOINT (E6 HW-CONFIRMED 2026-10-08: the incumbent link "
+        "survives a radio-initiated join - multipoint works): disable the app's "
+        "reason-0x13 disconnect executor. E3 (btmon, 2026-10-08) proved a "
+        "SECOND eviction path beyond the kick: a radio-initiated headset "
+        "join GRACEFULLY killed the incumbent PC SPP link (L2CAP "
+        "disconnect + HCI Disconnect Complete 0x13) even with --no-kick. "
+        "The executor is the call at 0x01E178CE (disconnect(handle,0x13) "
+        "via 0x01E07B08) reached from the BT API dispatcher case 0x4A "
+        "('disconnect current', fired by the UI 'connect selected device' "
+        "flow) and stack dispatcher cmd 8/10. NOP-ing it stops all "
+        "app-initiated 0x13 teardowns so the incumbent link survives the "
+        "join - experiment E6 of Findings ch. 27 SS27.9: combine with "
+        "--conn-num=2 --no-kick --force-page-scan. SIDE EFFECTS: menu "
+        "disconnect and explicit disconnect commands no longer release "
+        "links (power-cycle instead); app device state diverges from the "
+        "link state.",
     )
     ap.add_argument(
         "--sectors",
@@ -1851,7 +2019,8 @@ def main():
     validate_pf_combo(a7, a8)
 
     PATCHES = build_patches(args.bluetooth_mode, a7, a8, args.conn_num,
-                            args.no_kick, args.force_page_scan)
+                            args.no_kick, args.force_page_scan,
+                            args.force_role_keep, args.no_disconnect_13)
 
     raw, app, app_start = load_app(args.src)
     print("source: %s (%d bytes)" % (args.src, len(raw)))
@@ -1861,11 +2030,15 @@ def main():
     )
     extra = ""
     if args.conn_num is not None:
-        extra += " --conn-num=%d (EXPERIMENTAL)" % args.conn_num
+        extra += " --conn-num=%d (multipoint)" % args.conn_num
     if args.no_kick:
-        extra += " --no-kick (EXPERIMENTAL)"
+        extra += " --no-kick (multipoint)"
     if args.force_page_scan:
-        extra += " --force-page-scan (EXPERIMENTAL)"
+        extra += " --force-page-scan (multipoint)"
+    if args.force_role_keep:
+        extra += " --force-role-keep (multipoint)"
+    if args.no_disconnect_13:
+        extra += " --no-disconnect-13 (multipoint)"
     print("configuration: --bluetooth-mode %d --PTT=%s --PTT2=%s --OD-PTT=%s%s\n"
           % (args.bluetooth_mode, ptt_action, a7, a8, extra))
 
@@ -1892,6 +2065,10 @@ def main():
         wanted += ["nokick"]
     if args.force_page_scan:
         wanted += ["pagescan"]
+    if args.force_role_keep:
+        wanted += ["rolekeep"]
+    if args.no_disconnect_13:
+        wanted += ["disc13"]
     wanted = list(dict.fromkeys(wanted))
     if ({"pfbody7", "pfbody8", "pfrelease", "pflabels"} & set(wanted)
             and PF_LITERAL_PATCHES & set(wanted)):

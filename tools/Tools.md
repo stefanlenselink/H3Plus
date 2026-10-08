@@ -59,7 +59,7 @@ All paths below are relative to the repo root.
 5. [General binary inspection](#5-general-binary-inspection)
    - [`analyze.py`](#51-analyzepy) · [`strings.py`](#52-stringspy) · [`region.py`](#53-regionpy) · [`hexdump.py`](#54-hexdumppy) · [`headers.py`](#55-headerspy) · [`pedump.py`](#56-pedumppy)
 6. [Bluetooth test rig (Linux)](#6-bluetooth-test-rig-linux)
-   - [`bt_be_headset.sh`](#61-bt_be_headsetsh-) ⭐ · [`bt_spp_hold.py`](#62-bt_spp_holdpy-) ⭐⭐ · [`bt_spp_ptt.py`](#63-bt_spp_pttpy) · [`bt_ag_capture.py`](#64-bt_ag_capturepy) · [`bt_hf_sim.py`](#65-bt_hf_simpy) · [`bt_audio_check.sh`](#66-bt_audio_checksh) · [`bt_wait_and_pair.sh`](#67-bt_wait_and_pairsh-deprecated) · [`bt_multipoint_probe.py`](#68-bt_multipoint_probepy)
+   - [`bt_be_headset.sh`](#61-bt_be_headsetsh-) ⭐ · [`bt_spp_hold.py`](#62-bt_spp_holdpy-) ⭐⭐ · [`bt_spp_ptt.py`](#63-bt_spp_pttpy) · [`bt_ag_capture.py`](#64-bt_ag_capturepy) · [`bt_hf_sim.py`](#65-bt_hf_simpy) · [`bt_audio_check.sh`](#66-bt_audio_checksh) · [`bt_wait_and_pair.sh`](#67-bt_wait_and_pairsh) · [`bt_multipoint_probe.py`](#68-bt_multipoint_probepy)
 7. [Verification & regression suites](#7-verification--regression-suites)
    - [`verify_cli.py`](#71-verify_clipy) · [`verify_actions.py`](#72-verify_actionspy)
 8. [Typical workflows](#8-typical-workflows)
@@ -139,7 +139,9 @@ python tools/patch_h3plus_firmware_bluetooth.py <src> [dst] [options]
 | `--conn-num=1\|2` | **EXPERIMENTAL / UNTESTED.** Rewrite the stack's `user_ctrl_conn_num` init (`r1 \|= 16` → `\|= 32` at VA `0x01E182DC`, one byte) — the 2-bit "how many BT connections may be active" gate ([§9B.10.2](../findings/22-bluetooth-7-multipoint-architecture.md#9b102-gate-fully-located--the---conn-num-one-byte-patch-2026-10-02-untested)). `1` = stock single-device; `2` = ask the stack for multipoint (headset + TID-PTT button). Default: site untouched (but `--show` reports both states). |
 | `--no-kick` | **EXPERIMENTAL / UNTESTED.** Disable the app's disconnect kick — the ONLY code that disconnects a BT device ([Ch. 26 §26.4](../findings/26-bluetooth-9-eviction-decision.md#264--the-kick-routine-0x01e5b22a--the-eviction-decision)). The app runs it before paging a second device, which is why a second device always evicts the first even with `--conn-num=2` (hardware-confirmed). Rewrites the routine entry `0x01E5B22A` (`75 04 c5 ff` → `40 23 80 00` = `r0 = 3; rts`, the stock "no connection" return): no app-initiated disconnects ever happen, so a second device may survive as a passive "ghost link". **Side effects:** BT off / menu disconnect stop releasing the link. Option A of [§26.7](../findings/26-bluetooth-9-eviction-decision.md#267--options-for-getting-multipoint-working): combine with `--conn-num=2`. **HW round 1 (2026-10-05): the NOP is live — incoming connection attempts no longer evict the headset; radio-initiated paging still breaks it at controller level ([§26.9](../findings/26-bluetooth-9-eviction-decision.md#269--option-a-hardware-round-1-kick-nop-works-page-scan-is-the-next-gate-2026-10-05-06)).** Default: off (but `--show` reports both states). |
 | `--force-page-scan` | **EXPERIMENTAL / UNTESTED.** Keep page scan enabled while a link is up, so a second device can connect **to** the radio ([Ch. 26 §26.9](../findings/26-bluetooth-9-eviction-decision.md#269--option-a-hardware-round-1-kick-nop-works-page-scan-is-the-next-gate-2026-10-05-06)). With `--no-kick` the radio no longer evicts, but it answers no incoming pages once connected (btmon: `Page Timeout`); the scan policy only re-enables page scan when `is_1t2_connection()` is false and the vendor's 1拖2 scan code (`multi_bd.c`) is compiled EMPTY. NOPs the page-scan disable branch at `0x01E18B0E` (`80 41 24 16` → `00 00 00 00`): every setter call enables page scan. **Side effect:** the radio is always connectable. Option A2: combine with `--no-kick --conn-num=2`. Default: off (but `--show` reports both states). |
-| `--only=NAME` | Apply only this internal patch (repeatable; expert / inspection). Names: `duplex`, `ptt` (known-bad), `pttdown`, `pttup`, `pf1down`, `pf1up`, `pf2down`, `pf2up` (legacy scanner literals), `pfbody7`, `pfbody8`, `pfrelease`, `pftable`, `pfhandler`, `pfcave`, `pflabels`, `connum`, `nokick`. Default set is `duplex` plus the key patches implied by the action options. When `--only` is given, the default `--PTT=BT-PTT` is **not** added unless `--PTT` is also given explicitly. |
+| `--force-role-keep` | **EXPERIMENTAL / UNTESTED.** Accept incoming ACL links with the vendor **keep-role** parameter `0xAA` instead of the stock role `1` (become master) — experiment **E4** of [Ch. 27 §27.8](../findings/27-firmware-2slot-stack-controller-wall.md#278--experiment-matrix-hardware-user-flashes). The stack task (`0x01E19E44` case 4) always accepts incoming ACLs; the role comes from stack-config flag `b[0xC02B] & 8`, which is clear in this firmware → role 1. With a headset holding HFP, the controller kills the second link at LL level ~644 ms after the page (btmon Connect Complete `0x13`); keep-role tests whether that refusal is a role conflict. Rewrites the config test at `0x01E1A03A` (`50 ee 97 01 61 ff 08 00 42 02` → `c0 ea 45 02` + six nops = unconditional goto to the `mov r1,#0xaa` at `0x01E1A4C8`). SCO setup is unaffected (it branches away before the test). Combine with `--conn-num=2 --no-kick --force-page-scan`. Default: off (but `--show` reports both states). |
+| `--no-disconnect-13` | **HW-CONFIRMED 2026-10-08 (E6, ch. 27 §27.11): multipoint works radio-initiated.** Disable the app's reason-`0x13` disconnect executor — experiment **E6** ([Ch. 27 §27.10](../findings/27-firmware-2slot-stack-controller-wall.md#2710--e3-run-2026-10-08-the-incumbent-kill-is-app-level---no-disconnect-13-e6)). E3 (btmon, 2026-10-08) proved a **second eviction path** beyond the kick: a radio-initiated headset join **gracefully** killed the incumbent PC SPP link (L2CAP Disconnection Request/Response, then Disconnect Complete `0x13`) even with `--no-kick` — the app's host stack, not the controller. The executor is the `disconnect(handle, 0x13)` call at `0x01E178CE` (find-conn `0x01E17420` modes 0/2 → wrapper `0x01E07B08`), reached from the BT API dispatcher `0x01E1792E` case `0x4A` ("disconnect current": mode-set `0x01E60188` + BT task UI "connect selected device" `0x01E61E22`) and stack dispatcher `0x01E21AF8` cases 8/10. NOPs the call (`bf ea 1b 81` → `00 00 00 00`); the function falls through to `mov r0,r4` (r4 = 0) and returns "disconnected", so every caller thinks the teardown succeeded. **E6 result:** the PC link survived the headset join, SPP PTT keys kept working, and the radio even re-paged the PC after reboot. **Known side effect:** after the headset becomes the app's current device, AT+MPTT squelch notifications arrive on the PC's SPP malformed (binary frames, RFCOMM `cr` bit flipped — §27.11; cosmetic, root-cause pending). **Side effects:** menu disconnect / explicit disconnect commands stop releasing links (power-cycle instead); app device state diverges from link state. Combine with `--conn-num=2 --no-kick --force-page-scan`. Default: off (but `--show` reports both states). |
+| `--only=NAME` | Apply only this internal patch (repeatable; expert / inspection). Names: `duplex`, `ptt` (known-bad), `pttdown`, `pttup`, `pf1down`, `pf1up`, `pf2down`, `pf2up` (legacy scanner literals), `pfbody7`, `pfbody8`, `pfrelease`, `pftable`, `pfhandler`, `pfcave`, `pflabels`, `connum`, `nokick`, `pagescan`, `rolekeep`, `disc13`. Default set is `duplex` plus the key patches implied by the action options. When `--only` is given, the default `--PTT=BT-PTT` is **not** added unless `--PTT` is also given explicitly. |
 | `--sectors=PREFIX` | Also export each changed 4 KiB flash sector as `PREFIX_<addr>.bin`, and print the exact `jl-uboot-tool` `erase` / `write` / `read … verify` commands. **Raw `.bin` / full dump only** — on a `.fw` container offsets ≠ flash addresses, and the tool refuses. |
 
 Option **names** and **action values** are matched case-insensitively (`--ptt=bt-ptt`
@@ -239,6 +241,25 @@ python tools/patch_h3plus_firmware_bluetooth.py Dumps/dump_internal.bin out.bin 
 # "Page Timeout" while connected)
 python tools/patch_h3plus_firmware_bluetooth.py Dumps/dump_internal.bin out.bin \
     --PTT=BT-PTT --PTT2=BT-PTT2 --OD-PTT=PTT --conn-num=2 --no-kick --force-page-scan
+
+# EXPERIMENTAL (UNTESTED): multipoint experiment E4 (ch. 27 §27.8) — Option A2
+# PLUS accepting incoming ACL links with keep-role 0xAA instead of the stock
+# become-master role 1 (the controller kills the second link ~644 ms after the
+# page while a headset holds HFP; E4 tests whether that is a role conflict)
+python tools/patch_h3plus_firmware_bluetooth.py Dumps/dump_internal.bin out.bin \
+    --PTT=BT-PTT --PTT2=BT-PTT2 --OD-PTT=PTT --conn-num=2 --no-kick \
+    --force-page-scan --force-role-keep
+
+# HW-CONFIRMED 2026-10-08 (E6, ch. 27 §27.11): the full E4 recipe PLUS NOP-ing
+# the app's reason-0x13 disconnect executor at 0x01E178CE, which E3 proved is
+# the SECOND eviction path (a radio-initiated headset join gracefully killed
+# the incumbent PC SPP link despite --no-kick). Result: PC SPP survived the
+# headset join; SPP PTT worked with both devices up (see §27.11 for the
+# malformed-AT-notification side effect). Diff vs the flashed E4 image is 4
+# bytes in ONE sector: flash 0x01C000.
+python tools/patch_h3plus_firmware_bluetooth.py Dumps/dump_internal.bin work/e6_twodev.bin \
+    --PTT=BT-PTT --PTT2=BT-PTT2 --OD-PTT=PTT --conn-num=2 --no-kick \
+    --force-page-scan --force-role-keep --no-disconnect-13 --sectors=work/e6
 
 # minimal in-place flashing: export just the changed 4 KiB sectors + flash commands
 python tools/patch_h3plus_firmware_bluetooth.py BIN/TD-H3-PlusV1.0.50.bin --sectors=work/sect
@@ -817,21 +838,28 @@ connection.
 ./tools/bt_audio_check.sh [radio-mac]
 ```
 
-### 6.7 `bt_wait_and_pair.sh` *(deprecated)*
+### 6.7 `bt_wait_and_pair.sh`
 
-**What:** Watched a live `bluetoothctl` session and fired `pair`/`trust`/`connect` within
-milliseconds of the radio's classic BR/EDR endpoint appearing in scan output (it only
-broadcasts in a short burst when BT Pairing mode is entered). Matches an exact MAC or the
-name pattern `TD-H3-Plus-<digits>` (the BLE identity rotates between sessions).
+**What:** One-command PC↔radio pairing, **both directions**. Rewritten 2026-10-07 around the
+proven `bt_be_headset.sh` mechanics: makes the PC discoverable + pairable as a classic
+audio device — BLE advertising off (else the radio latches the LE identity, §9A.17), CoD
+`0x240404` (re-applied; profile registration resets it), `agent NoInputNoOutput` (Just
+Works — this is what auto-rejected passkey 888531 in the E1 capture: no agent was
+registered), `system-alias <name>`. With a MAC given it ALSO scans outward and fires
+`pair` the instant the radio's classic endpoint appears, removes any stale bond first,
+and answers leftover confirmation prompts with `yes`. Exits on `Pairing successful`.
 
-**Superseded by `bt_be_headset.sh`** — outbound discovery of the radio proved unreliable;
-letting the radio initiate is the working model. Kept for reference.
+**Name → mode** (§9A.22 — the radio caches the name at pairing time; rename = re-pair
+both sides): default `TID-PTT-PC` → mode 1 (BT button, `+SPP=P` keys TX, RX on speaker);
+`TID-MIC-EAR` → mode 4 full duplex; unrecognised → RX only, radio's own mic for TX.
 
 **Usage:**
 
 ```bash
-./tools/bt_wait_and_pair.sh [MAC]     # no MAC = name-pattern matching only
-# Start BEFORE entering BT pairing mode on the radio; enter it ONCE and leave it.
+sudo ./tools/bt_wait_and_pair.sh                       # be discoverable only
+sudo ./tools/bt_wait_and_pair.sh 0B:FF:59:E8:85:92     # + outward pair too
+sudo ./tools/bt_wait_and_pair.sh 0B:FF:59:E8:85:92 TID-MIC-EAR
+# then: radio BT menu -> BT Pairing -> select the PC's name (auto-accepted)
 ```
 
 ---

@@ -22,110 +22,205 @@
 # SOFTWARE.
 
 #
-# Watches a live `bluetoothctl` session and fires `pair`/`trust`/`connect` the
-# INSTANT the radio's classic BR/EDR endpoint appears in the scan output.
+# Pair the PC with the H3 Plus -- BOTH directions, one command.
 #
-# Background: the radio's classic endpoint (no "(BLE)" suffix) only seems to
-# broadcast for a very short burst right when BT Pairing mode is (re-)entered
-# on the device, then disappears from bluetoothctl's known-device list before
-# a human can type `pair <mac>` in time. This script keeps a single
-# bluetoothctl session open, tails its output continuously, and reacts within
-# milliseconds instead of relying on manual typing speed.
+# WHY THIS VERSION EXISTS
+#   The old script only scanned outward for the radio's classic endpoint and
+#   fired `pair` when it appeared.  That route never worked reliably (the
+#   endpoint is seen exactly once -- findings 9A.14/9A.17) and, worse, the PC
+#   was never made discoverable/pairable, so the radio's BT Pairing screen --
+#   which is the INITIATOR -- had nothing to select.  This version ports the
+#   proven mechanics of tools/bt_be_headset.sh:
+#     - BLE advertising OFF   (else the radio latches the LE identity, 9A.17)
+#     - CoD 0x240404          (wearable-headset class; re-applied because
+#                              profile registration silently resets it)
+#     - agent NoInputNoOutput (Just Works: no numeric-comparison prompt on
+#                              the PC -- this is what rejected passkey 888531
+#                              in the E1 capture: no agent was registered)
+#     - system-alias <name>   (the name the radio will list)
 #
-# We ALSO learned (empirically) that the radio's BLE identity's MAC and name
-# suffix can change between sessions (classic BLE private-address rotation:
-# saw MAC 0B:FF:59:9E:37:81 name "TD-H3-Plus-9320(BLE)" become MAC
-# CD:90:4D:05:A1:81 name "TD-H3-Plus-7934(BLE)" with no firmware change or
-# reflash in between). We do NOT yet know if the classic BR/EDR endpoint's
-# MAC (0B:FF:59:E8:85:92, "TD-H3-Plus-9320", seen exactly once) is equally
-# unstable, so this script matches EITHER an exact MAC OR a name pattern,
-# whichever you pass it, and always falls back to name-pattern matching too
-# so a MAC change doesn't leave you stuck again.
+# NAME -> MODE (the firmware classifies by name, findings 9A.22):
+#   TID-PTT-PC (default)  mode 1: BT button; +SPP=P keys TX, RX on speaker
+#   TID-MIC-EAR           mode 4: full duplex headset (BT mic + BT speaker)
+#   anything unrecognised RX only; TX uses the radio's own mic
+#   The radio caches the name at PAIRING time -- after renaming, remove the
+#   bond on BOTH sides and re-pair.
 #
-# Usage:
-#   chmod +x tools/bt_wait_and_pair.sh
-#   ./tools/bt_wait_and_pair.sh 0B:FF:59:E8:85:92
-#   ./tools/bt_wait_and_pair.sh                      # name-pattern matching only
+# USAGE
+#   sudo tools/bt_wait_and_pair.sh                     # be discoverable only
+#   sudo tools/bt_wait_and_pair.sh 0B:FF:59:E8:85:92   # + outward pair too
+#   sudo tools/bt_wait_and_pair.sh 0B:FF:59:E8:85:92 TID-MIC-EAR
 #
-# Recommended sequence:
-#   1. Start this script FIRST (so scanning is already active).
-#   2. THEN enter the radio's BT Pairing screen ONCE and leave it there --
-#      do not repeatedly toggle it, that just restarts the burst window.
-#   3. Wait. The script reacts within milliseconds of the classic endpoint
-#      appearing, so there is no human-reaction-time bottleneck anymore.
+#   Then: radio BT menu -> BT Pairing -> select the PC's name.  Pairing is
+#   auto-accepted.  With a MAC given, entering pairing mode on the radio may
+#   ALSO be caught from our side (whichever fires first wins).
+#
+# NOTES
+#   - PipeWire/WirePlumber must be RUNNING (they register the audio profiles).
+#   - Do NOT run tools/bt_ag_capture.py first (sdptool add HFAG poisons the
+#     role until the bluetooth stack is restarted).
+#   - root is needed for the CoD write; without it the radio may not list the
+#     PC at all.  The script warns and continues.
+#
+
+if [[ "${1:-}" == -h || "${1:-}" == --help ]]; then
+    sed -n '23,63p' "$0"; exit 0
+fi
 
 set -u
+# writing to a dead coproc pipe raises SIGPIPE, which KILLS a non-interactive
+# bash script outright (|| true cannot catch a signal death) -- ignore it so
+# failed writes just return a status instead
+trap '' PIPE
+
 TARGET="${1:-}"
+NAME="${2:-TID-PTT-PC}"
+ADAPTER="${BT_ADAPTER:-hci0}"
 
-if [[ -n "$TARGET" ]]; then
-    echo "Watching for classic endpoint MAC: $TARGET"
-    echo "(also falling back to name pattern 'TD-H3-Plus-<digits>' in case the MAC has rotated)"
-else
-    echo "Watching for classic endpoint name matching: TD-H3-Plus-<digits> (no MAC given)"
+command -v bluetoothctl >/dev/null || { echo "bluetoothctl not installed" >&2; exit 1; }
+
+if [[ "$(id -u)" != 0 ]]; then
+    echo "WARNING: not root -- the CoD write (hciconfig class) will fail and" >&2
+    echo "         the radio may not list the PC.  Recommended: sudo $0 ${TARGET:-}" >&2
 fi
-echo "Start this script BEFORE entering BT Pairing mode on the radio, then"
-echo "enter pairing mode ONCE and leave it -- do not toggle repeatedly."
-echo "---"
 
-# Open bluetoothctl as a coprocess so we can both write commands to it and
-# read its live (unbuffered) output in the same loop.
 coproc BT { stdbuf -oL -eL bluetoothctl; }
+BTIN=${BT[0]}
+# bash UNSETS $BT_PID and closes the coproc fds once it reaps the job -- keep ours
+BT_PID_SAVED=${BT_PID:-}
+# regular fd copy: inheritable by subshells (bash closes the coproc fds there)
+exec {BTW}>&"${BT[1]}"
 
+# bluetoothctl SILENTLY DISCARDS input while busy -- pace everything.
 send() {
-    echo "$1" >&"${BT[1]}"
+    echo "$1" >&$BTW 2>/dev/null || true
+    sleep 0.4
 }
 
-sleep 1
+apply_class() {
+    hciconfig "$ADAPTER" class 0x240404 >/dev/null 2>&1 \
+        && echo "    CoD -> 0x240404" \
+        || echo "    ! could not set CoD (need root?) -- radio may not list the PC" >&2
+}
+
+# cleanup MUST exit: it runs from the INT/TERM traps too, and without an exit
+# the main loop resumes against the bluetoothctl we just killed -> the closed
+# coproc fd makes `read <&$BTIN` fail instantly (rc=1, no 1s timeout) ->
+# "Bad file descriptor" busy-loop flood (bench 2026-10-07).
+cleanup() {
+    local rc=$?
+    trap - EXIT INT TERM
+    if kill -0 "$BT_PID_SAVED" 2>/dev/null; then
+        send "scan off"
+        send "discoverable off"
+        kill "$BT_PID_SAVED" 2>/dev/null
+    fi
+    exit "$rc"
+}
+trap cleanup EXIT
+trap cleanup INT TERM
+
+YES_PENDING=0
+
 send "power on"
 sleep 1
-send "agent on"
+send "agent NoInputNoOutput"
 send "default-agent"
-# Focus entirely on classic BR/EDR inquiry -- "scan on" interleaves LE
-# advertising scans too, which steals airtime from the classic inquiry burst.
-send "scan bredr"
+send "advertise off"
+apply_class
+send "system-alias \"$NAME\""
+send "pairable on"
+send "discoverable-timeout 0"
+send "discoverable on"
 
-paired=0
-connected=0
-FOUND_MAC=""
+if [[ -n "$TARGET" ]]; then
+    echo "Removing any stale bond for $TARGET (an old link key gets rejected)..."
+    send "remove $TARGET"
+    send "scan on"
+fi
 
-MAC_RE='([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}'
+echo
+echo "PC is now discoverable + pairable as '$NAME' (BLE off, headset CoD)."
+echo "On the radio:  BT menu -> BT Pairing -> select '$NAME'."
+[[ -n "$TARGET" ]] && echo "(also scanning outward for $TARGET -- either direction works)"
+echo "Ctrl-C to abort."
+echo
 
-while IFS= read -r line <&"${BT[0]}"; do
-    echo "$line"
+last_class=$SECONDS
+last_disc=$SECONDS
 
-    # Only consider [NEW]/[CHG] Device lines that are NOT the "(BLE)" endpoint.
-    if [[ $paired -eq 0 && "$line" =~ Device\ ($MAC_RE)\ (.+)$ && "$line" != *"(BLE)"* ]]; then
-        candidate_mac="${BASH_REMATCH[1]}"
-        candidate_name="${BASH_REMATCH[3]}"
-
-        match=0
-        if [[ -n "$TARGET" && "$candidate_mac" == "$TARGET" ]]; then
-            match=1
-        elif [[ "$candidate_name" =~ TD-H3-Plus-[0-9]+$ ]]; then
-            match=1
+while true; do
+    # bluetoothctl died on its own?  Say so BEFORE touching the (possibly
+    # closed) coproc fd -- reading a closed fd prints a shell-level
+    # "Bad file descriptor" we cannot silence from here.
+    if ! kill -0 "$BT_PID_SAVED" 2>/dev/null; then
+        echo "bluetoothctl exited -- giving up." >&2
+        exit 1
+    fi
+    line=""
+    # order matters: 2>/dev/null BEFORE the coproc fd -- a failed <& is a
+    # redirection error reported by the shell itself, past the command's stderr
+    read -t 1 -r line 2>/dev/null <&"$BTIN"
+    rc=$?
+    if (( rc > 0 && rc < 128 )); then
+        # EOF or invalid fd: bluetoothctl died/was closed (timeout gives
+        # rc > 128).  Exit instead of the old "Bad file descriptor" busy-loop.
+        echo "bluetoothctl exited -- giving up." >&2
+        exit 1
+    fi
+    if (( rc == 0 )); then
+        echo "    bluetoothctl: $line"
+        case "$line" in
+            *"Pairing successful"*|*"Successfully paired"*|*"$TARGET"*"Bonded: yes"*|*"$TARGET"*"Paired: yes"*)
+                YES_PENDING=0
+                if [[ -n "$TARGET" ]]; then
+                    send "menu main"      # bluetoothctl may have switched to the device menu
+                    send "trust $TARGET"
+                fi
+                echo "==> PAIRED."
+                if [[ -n "$TARGET" ]]; then
+                    echo "    next:  sudo python3 tools/bt_spp_hold.py $TARGET"
+                fi
+                exit 0
+                ;;
+            # ---- outward: classic endpoint appeared -> pair it ----
+            # (wildcard prefix: lines may carry the [bluetooth]# prompt)
+            *"[NEW] Device $TARGET "*|*"[CHG] Device $TARGET "*)
+                send "scan off"
+                echo "==> classic endpoint appeared -- pairing..."
+                send "pair $TARGET"
+                YES_PENDING=8
+                ;;
+            *"Already paired"*)
+                if [[ -n "$TARGET" ]]; then
+                    echo "    stale bond still present -- removing and retrying..."
+                    send "remove $TARGET"
+                    send "pair $TARGET"
+                    YES_PENDING=8
+                fi
+                ;;
+            # ---- auto-answer any confirmation that still appears ----
+            *"Confirm passkey"*|*"Confirm pairing"*|*"passkey"*|*"(yes/no)"*)
+                send "yes"
+                YES_PENDING=0
+                ;;
+            *"not available"*|*"not found"*)
+                YES_PENDING=0
+                ;;
+        esac
+    else
+        # 1 s timeout tick: keep answering prompts, keep discoverability alive
+        if (( YES_PENDING > 0 )); then
+            echo "yes" >&$BTW 2>/dev/null || true
+            ((YES_PENDING--))
         fi
-
-        if [[ $match -eq 1 ]]; then
-            FOUND_MAC="$candidate_mac"
-            echo ">>>>> Classic endpoint spotted ($candidate_mac / $candidate_name)! Sending pair/trust now. <<<<<"
-            send "pair $FOUND_MAC"
-            paired=1
+        if (( SECONDS - last_class > 10 )); then
+            hciconfig "$ADAPTER" class 0x240404 >/dev/null 2>&1 || true
+            last_class=$SECONDS
         fi
-    fi
-
-    if [[ "$line" == *"Pairing successful"* ]]; then
-        echo ">>>>> Paired. Sending trust + connect. <<<<<"
-        send "trust $FOUND_MAC"
-        send "connect $FOUND_MAC"
-    fi
-
-    if [[ "$line" == *"Connection successful"* || "$line" == *"Connected: yes"* ]]; then
-        connected=1
-        echo ">>>>> Connected ($FOUND_MAC). You can Ctrl+C now and proceed with sdptool/tools/bt_hf_sim.py. <<<<<"
-    fi
-
-    if [[ "$line" == *"AuthenticationFailed"* || "$line" == *"org.bluez.Error"* ]]; then
-        echo ">>>>> Pairing/connect error seen above -- may need to retry. <<<<<"
-        paired=0
+        if (( SECONDS - last_disc > 4 )); then
+            echo "discoverable on" >&$BTW 2>/dev/null || true
+            last_disc=$SECONDS
+        fi
     fi
 done

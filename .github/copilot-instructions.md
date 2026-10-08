@@ -91,6 +91,8 @@ python tools/patch_h3plus_firmware_bluetooth.py <src> [<dst>] [--show]
     [--conn-num=1|2]   # user_ctrl_conn_num gate, 1 byte; HW-tested insufficient (ch.22 §9B.10.2/§9B.11)
     [--no-kick]        # NOP the app disconnect kick @0x01E5B22A (r0=3; rts); Option A = with --conn-num=2 (ch.26 §26.7)
     [--force-page-scan] # NOP page-scan disable branch @0x01E18B0E (nop;nop) — radio stays connectable while connected; Option A2 (ch.26 §26.9)
+    [--force-role-keep] # ACL accept role -> 0xAA keep-role (goto 0x01E1A4C8) instead of stock 1 become-master; experiment E4 (ch.27 §27.8)
+    [--no-disconnect-13] # NOP app disconnect executor @0x01E178CE (call 0x01E07B08); E6 — E3 proved the incumbent-kill on radio-initiated joins is app-level (ch.27 §27.10)
     [--sectors=PREFIX] [--only SITE]
 ```
 
@@ -174,7 +176,7 @@ scripts here, and none should be added.
   Flashing is the user's action; print the exact `jl-uboot-tool` commands instead
   (`--sectors` route preferred; always `read` back and compare after `write`).
 
-## Current state & open frontiers (as of 2026-10-02)
+## Current state & open frontiers (as of 2026-10-08)
 
 Done: both ciphers broken · classifier decoded · routing modes 1–6 mapped · key-remap
 patches HW-confirmed (BT-mic PTT, duplex) · patch tool + 2 test suites green ·
@@ -249,8 +251,46 @@ Open (in priority order):
    (`FUN_01e19e44` case 4) always accepts incoming ACLs (role 1, or 0xAA if
    `DAT_0000c02b & 8`). **The wall is the prebuilt controller library.**
    **NEXT: experiments E1–E5 (ch. 27 §27.8)** — E2 (headset + outgoing page to
-   TID-PTT) is the cheapest decisive test; E4 = force role 0xAA in the accept
-   (2-byte patch) if E2 shows outgoing pages also die. Remaining routes if the
+   TID-PTT) is the cheapest decisive test. **E4 SHIPPED 2026-10-07** as
+   `--force-role-keep`: the case-4 ACL role test at `0x01E1A03A` (`lb.z
+   r0,[r9+0x107]` + `jmnz`, flag = RAM `0xC02B` bit 3, init `0x00` → stock role
+   1) becomes an unconditional `goto 0x01E1A4C8` (the `mov r1,#0xaa` keep-role
+   load) + nops; SCO/eSCO/reject branch away earlier so they are unaffected;
+   both suites green. E4 build = `--conn-num=2 --no-kick --force-page-scan
+   --force-role-keep`. **E4 image BUILT 2026-10-07** (`work/e4_twodev.bin` +
+   `work/e4_01F000.bin`, from the user's dump): A2→E4 is a **single 4 KiB sector
+   write @flash `0x01F000`** — every other patch sector byte-identical to the radio
+   (A2 rebuild reproduces the 10 flashed sectors exactly; radio readback `rb_060000`
+   matches the E4 `0x060000` sector); all 4 patch bytes verified in the decrypted
+   image. **E4 HW-tested 2026-10-07: FAILED** — the flashed image is byte-identical
+   to `work/e4_twodev.bin`; E1 OK, but the incoming second link still dies at LL
+   (~722 ms, 0x13) with the PC even offering role switch; and a radio-initiated
+   headset join killed the PC's SPP link despite `--no-kick` (second eviction path:
+   disconnect-current wrapper `0x01E07B08` / dispatcher cmd 8/10, or the
+   controller). **E3 RUN + LOCATED 2026-10-08 (ch. 27 §27.10): the incumbent-kill is
+   APP-LEVEL** — btmon shows a graceful L2CAP Disconnection Request/Response then
+   Disconnect Complete `0x13` (handle 1) ~15 s into the headset join; executor =
+   the `disconnect(handle,0x13)` call @`0x01E178CE` (find-conn `0x01E17420` modes
+   0/2 → wrapper `0x01E07B08`), reached from dispatcher `0x01E1792E` case `0x4A`
+   ("disconnect current": mode-set `0x01E60188`, BT-task UI "connect selected
+   device" `0x01E61E22`) + stack dispatcher `0x01E21AF8` cases 8/10. **E6 SHIPPED
+   2026-10-08** as `--no-disconnect-13` (NOP @`0x01E178CE`; suites green); E6 image
+   `work/e6_twodev.bin` built — diff vs flashed E4 is 4 bytes in ONE sector,
+   flash `0x01C000`. **E6 HW-TESTED 2026-10-08: PASSED (ch. 27 §27.11) —
+   MULTIPOINT ACHIEVED radio-initiated.** PC SPP incumbent SURVIVED a
+   radio-initiated Jabra headset join; both links stayed up (only Disconnect
+   in the capture = the user's power-cycle, reason 0x08), SPP PTT keyed the
+   radio with both devices connected, normal PTT unaffected. The
+   "controller wall" is therefore **incoming-pages-only** (a second device
+   paging the radio still dies at LL ~700 ms, 0x13); outgoing joins work.
+   **Side effect:** after a second device joins, the radio's AT+MPTT
+   squelch notifications arrive malformed on the first device's SPP channel
+   (cr-bit flipped, "+MP" fragments; +SPP=P/R echo path unaffected) —
+   root-cause = open static item. **NEXT:** user trialing the TID-PTT button
+   as third device (pools are 2-slot — cap expected); confirm HFP audio to
+   the headset; root-cause the malformed notifications; E5 (SCO scheduling)
+   stays secondary.
+   Remaining routes if the
    controller is hard-limited: vendor multipoint controller lib, SDK rebuild
    (ch. 25 decompile⇒compile route), or single-device workaround (one device
    carrying SPP+HFP, e.g. custom ESP32 combo device — profile coexistence proven).
