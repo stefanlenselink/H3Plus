@@ -452,6 +452,273 @@ if cp.returncode == 0:
        and g(a, P.DISC13_VA, 4) == b"\x00\x00\x00\x00",
        "E6 combo carries all five multipoint patches")
 
+# --- --no-pairing-kick (multipoint experiment E7, ch.27 SS27.12) -------------
+pk = os.path.join(OUTDIR, "v_pairkick.bin")
+cp = run(SRC, pk, "--only", "pairkickall", "--only", "pairkickone",
+         "--no-pairing-kick")
+ck(cp.returncode == 0, "--no-pairing-kick build")
+if cp.returncode == 0:
+    a = dec(pk)
+    ck(g(a, P.PAIRKICK_ALL_VA, 8) == bytes.fromhex("000000004521c63c"),
+       "disconnect-all 0x16 call -> nop;nop, loop + scan-reset intact")
+    ck(g(a, P.PAIRKICK_ONE_VA, 8) == bytes.fromhex("00000000059400e1"),
+       "single 0x16 call -> nop;nop, falls through to return")
+    d = [i for i in range(len(stock)) if stock[i] != a[i]]
+    o1 = P.va_to_off(P.PAIRKICK_ALL_VA)
+    o2 = P.va_to_off(P.PAIRKICK_ONE_VA)
+    ck(len(d) == 8 and all(o1 <= i < o1 + 4 or o2 <= i < o2 + 4 for i in d),
+       "pairkick patch touches exactly 8 bytes (%s)" % [hex(x) for x in d])
+    cp = run(pk, "--show", "--no-pairing-kick")
+    pklines = [l for l in cp.stdout.splitlines() if l.startswith("pairkick")]
+    ck(cp.returncode == 0 and "UNKNOWN" not in cp.stdout
+       and len(pklines) == 2 and all("TARGET" in l for l in pklines),
+       "--show on patched pairkick clean")
+    cp2 = run(pk, pk + ".2", "--only", "pairkickall", "--only", "pairkickone",
+              "--no-pairing-kick")
+    ck(cp2.returncode == 0 and "Nothing to do" in cp2.stdout,
+       "pairkick idempotent")
+    cp3 = run(pk, os.path.join(OUTDIR, "v_pkback.bin"),
+              "--only", "pairkickall", "--only", "pairkickone")
+    b3 = dec(os.path.join(OUTDIR, "v_pkback.bin")) if cp3.returncode == 0 else b""
+    ck(cp3.returncode == 0 and b3[o1:o1 + 4] == bytes.fromhex("bfea55bb")
+       and b3[o2:o2 + 4] == bytes.fromhex("bfeae5ba"),
+       "pairkick reverts to stock")
+# E7 combo: full multipoint recipe + pairing-kick NOPs
+ce7 = os.path.join(OUTDIR, "v_e7.bin")
+cp = run(SRC, ce7, "--no-kick", "--conn-num=2", "--force-page-scan",
+         "--force-role-keep", "--no-disconnect-13", "--no-pairing-kick",
+         "--PTT=BT-PTT", "--PTT2=BT-PTT2", "--OD-PTT=PTT")
+ck(cp.returncode == 0, "E7 combo build (E6 + --no-pairing-kick)")
+if cp.returncode == 0:
+    a = dec(ce7)
+    ck(g(a, P.NOKICK_VA, 4) == b"\x40\x23\x80\x00"
+       and g(a, P.CONN_NUM_VA, 2) == b"\x31\x25"
+       and g(a, P.PAGESCAN_VA, 4) == b"\x00\x00\x00\x00"
+       and g(a, P.ROLEKEEP_VA, 10) == bytes.fromhex("c0ea4502000000000000")
+       and g(a, P.DISC13_VA, 4) == b"\x00\x00\x00\x00"
+       and g(a, P.PAIRKICK_ALL_VA, 4) == b"\x00\x00\x00\x00"
+       and g(a, P.PAIRKICK_ONE_VA, 4) == b"\x00\x00\x00\x00",
+       "E7 combo carries all seven multipoint patches")
+
+# --- --no-cleanup-kick (multipoint experiment E8, ch.27 SS27.13/27.14) -------
+ckk = os.path.join(OUTDIR, "v_cleanupkick.bin")
+cp = run(SRC, ckk, "--only", "cleanupkickvar", "--only", "cleanupkickorphan",
+         "--only", "cleanupkickprof", "--no-cleanup-kick")
+ck(cp.returncode == 0, "--no-cleanup-kick build")
+if cp.returncode == 0:
+    a = dec(ckk)
+    ck(g(a, P.CLEANUPKICK_VAR_VA, 8) == bytes.fromhex("00000000649d5016"),
+       "variable-reason event call -> nop;nop, msg path intact")
+    ck(g(a, P.CLEANUPKICK_ORPHAN_VA, 8) == bytes.fromhex("00000000549d84f9"),
+       "orphan-ACL cleanup call -> nop;nop, falls through to return")
+    ck(g(a, P.CLEANUPKICK_PROF_VA, 8) == bytes.fromhex("00000000486261ff"),
+       "profile-record cleanup call -> nop;nop, record still cleared")
+    d = [i for i in range(len(stock)) if stock[i] != a[i]]
+    o1 = P.va_to_off(P.CLEANUPKICK_VAR_VA)
+    o2 = P.va_to_off(P.CLEANUPKICK_ORPHAN_VA)
+    o3 = P.va_to_off(P.CLEANUPKICK_PROF_VA)
+    ck(len(d) == 12 and all(o1 <= i < o1 + 4 or o2 <= i < o2 + 4
+       or o3 <= i < o3 + 4 for i in d),
+       "cleanupkick patch touches exactly 12 bytes (%s)" % [hex(x) for x in d])
+    cp = run(ckk, "--show", "--no-cleanup-kick")
+    cklines = [l for l in cp.stdout.splitlines() if l.startswith("cleanupkick")]
+    ck(cp.returncode == 0 and "UNKNOWN" not in cp.stdout
+       and len(cklines) == 3 and all("TARGET" in l for l in cklines),
+       "--show on patched cleanupkick clean")
+    cp2 = run(ckk, ckk + ".2", "--only", "cleanupkickvar",
+              "--only", "cleanupkickorphan", "--only", "cleanupkickprof",
+              "--no-cleanup-kick")
+    ck(cp2.returncode == 0 and "Nothing to do" in cp2.stdout,
+       "cleanupkick idempotent")
+    cp3 = run(ckk, os.path.join(OUTDIR, "v_ckback.bin"),
+              "--only", "cleanupkickvar", "--only", "cleanupkickorphan",
+              "--only", "cleanupkickprof")
+    b3 = dec(os.path.join(OUTDIR, "v_ckback.bin")) if cp3.returncode == 0 else b""
+    ck(cp3.returncode == 0 and b3[o1:o1 + 4] == bytes.fromhex("bfeadffc")
+       and b3[o2:o2 + 4] == bytes.fromhex("bfeabdfc")
+       and b3[o3:o3 + 4] == bytes.fromhex("bfeaeec4"),
+       "cleanupkick reverts to stock")
+# E8 combo: full multipoint recipe + cleanup-kick NOPs
+ce8 = os.path.join(OUTDIR, "v_e8.bin")
+cp = run(SRC, ce8, "--no-kick", "--conn-num=2", "--force-page-scan",
+         "--force-role-keep", "--no-disconnect-13", "--no-pairing-kick",
+         "--no-cleanup-kick",
+         "--PTT=BT-PTT", "--PTT2=BT-PTT2", "--OD-PTT=PTT")
+ck(cp.returncode == 0, "E8 combo build (E7 + --no-cleanup-kick)")
+if cp.returncode == 0:
+    a = dec(ce8)
+    ck(g(a, P.NOKICK_VA, 4) == b"\x40\x23\x80\x00"
+       and g(a, P.CONN_NUM_VA, 2) == b"\x31\x25"
+       and g(a, P.PAGESCAN_VA, 4) == b"\x00\x00\x00\x00"
+       and g(a, P.ROLEKEEP_VA, 10) == bytes.fromhex("c0ea4502000000000000")
+       and g(a, P.DISC13_VA, 4) == b"\x00\x00\x00\x00"
+       and g(a, P.PAIRKICK_ALL_VA, 4) == b"\x00\x00\x00\x00"
+       and g(a, P.PAIRKICK_ONE_VA, 4) == b"\x00\x00\x00\x00"
+       and g(a, P.CLEANUPKICK_VAR_VA, 4) == b"\x00\x00\x00\x00"
+       and g(a, P.CLEANUPKICK_ORPHAN_VA, 4) == b"\x00\x00\x00\x00"
+       and g(a, P.CLEANUPKICK_PROF_VA, 4) == b"\x00\x00\x00\x00",
+       "E8 combo carries all ten multipoint patches")
+
+# --- --no-l2cap-teardown (multipoint experiment E9, ch.27 SS27.15) -----------
+ltd = os.path.join(OUTDIR, "v_l2capteardown.bin")
+cp = run(SRC, ltd, "--only", "l2capteardownui", "--only", "l2capteardownmode",
+         "--no-l2cap-teardown")
+ck(cp.returncode == 0, "--no-l2cap-teardown build")
+if cp.returncode == 0:
+    a = dec(ltd)
+    ck(g(a, P.L2CAPTEARDOWN_UI_VA, 8) == bytes.fromhex("00000000506b804b"),
+       "connect-UI 0x4a post -> nop;nop, connect flow continues")
+    ck(g(a, P.L2CAPTEARDOWN_MODE_VA, 8) == bytes.fromhex("00000000048dbdea"),
+       "mode-setter 0x4a post -> nop;nop, mode switch continues")
+    d = [i for i in range(len(stock)) if stock[i] != a[i]]
+    o1 = P.va_to_off(P.L2CAPTEARDOWN_UI_VA)
+    o2 = P.va_to_off(P.L2CAPTEARDOWN_MODE_VA)
+    ck(len(d) == 8 and all(o1 <= i < o1 + 4 or o2 <= i < o2 + 4 for i in d),
+       "l2capteardown patch touches exactly 8 bytes (%s)" % [hex(x) for x in d])
+    cp = run(ltd, "--show", "--no-l2cap-teardown")
+    ltdlines = [l for l in cp.stdout.splitlines() if l.startswith("l2capteardown")]
+    ck(cp.returncode == 0 and "UNKNOWN" not in cp.stdout
+       and len(ltdlines) == 2 and all("TARGET" in l for l in ltdlines),
+       "--show on patched l2capteardown clean")
+    cp2 = run(ltd, ltd + ".2", "--only", "l2capteardownui",
+              "--only", "l2capteardownmode", "--no-l2cap-teardown")
+    ck(cp2.returncode == 0 and "Nothing to do" in cp2.stdout,
+       "l2capteardown idempotent")
+    cp3 = run(ltd, os.path.join(OUTDIR, "v_ltdback.bin"),
+              "--only", "l2capteardownui", "--only", "l2capteardownmode")
+    b3 = dec(os.path.join(OUTDIR, "v_ltdback.bin")) if cp3.returncode == 0 else b""
+    ck(cp3.returncode == 0 and b3[o1:o1 + 4] == bytes.fromhex("bdea84ad")
+       and b3[o2:o2 + 4] == bytes.fromhex("bdead1bb"),
+       "l2capteardown reverts to stock")
+# E9 combo: full multipoint recipe + L2CAP-teardown NOPs
+ce9 = os.path.join(OUTDIR, "v_e9.bin")
+cp = run(SRC, ce9, "--no-kick", "--conn-num=2", "--force-page-scan",
+         "--force-role-keep", "--no-disconnect-13", "--no-pairing-kick",
+         "--no-cleanup-kick", "--no-l2cap-teardown",
+         "--PTT=BT-PTT", "--PTT2=BT-PTT2", "--OD-PTT=PTT")
+ck(cp.returncode == 0, "E9 combo build (E8 + --no-l2cap-teardown)")
+if cp.returncode == 0:
+    a = dec(ce9)
+    ck(g(a, P.NOKICK_VA, 4) == b"\x40\x23\x80\x00"
+       and g(a, P.CONN_NUM_VA, 2) == b"\x31\x25"
+       and g(a, P.PAGESCAN_VA, 4) == b"\x00\x00\x00\x00"
+       and g(a, P.ROLEKEEP_VA, 10) == bytes.fromhex("c0ea4502000000000000")
+       and g(a, P.DISC13_VA, 4) == b"\x00\x00\x00\x00"
+       and g(a, P.PAIRKICK_ALL_VA, 4) == b"\x00\x00\x00\x00"
+       and g(a, P.PAIRKICK_ONE_VA, 4) == b"\x00\x00\x00\x00"
+       and g(a, P.CLEANUPKICK_VAR_VA, 4) == b"\x00\x00\x00\x00"
+       and g(a, P.CLEANUPKICK_ORPHAN_VA, 4) == b"\x00\x00\x00\x00"
+       and g(a, P.CLEANUPKICK_PROF_VA, 4) == b"\x00\x00\x00\x00"
+       and g(a, P.L2CAPTEARDOWN_UI_VA, 4) == b"\x00\x00\x00\x00"
+       and g(a, P.L2CAPTEARDOWN_MODE_VA, 4) == b"\x00\x00\x00\x00",
+       "E9 combo carries all twelve multipoint patches")
+
+# --- --no-spp-close (multipoint experiment E10, ch.27 SS27.16) ---------------
+spc = os.path.join(OUTDIR, "v_sppclose.bin")
+cp = run(SRC, spc, "--only", "sppclose", "--no-spp-close")
+ck(cp.returncode == 0, "--no-spp-close build")
+if cp.returncode == 0:
+    a = dec(spc)
+    ck(g(a, P.SPPCLOSE_VA, 8) == bytes.fromhex("4020000401000060"),
+       "spp_channel_disconnect entry -> mov r0,#0; rts, push rets intact")
+    d = [i for i in range(len(stock)) if stock[i] != a[i]]
+    o1 = P.va_to_off(P.SPPCLOSE_VA)
+    ck(len(d) == 4 and all(o1 <= i < o1 + 4 for i in d),
+       "sppclose patch touches exactly 4 bytes (%s)" % [hex(x) for x in d])
+    cp = run(spc, "--show", "--no-spp-close")
+    splines = [l for l in cp.stdout.splitlines() if l.startswith("sppclose")]
+    ck(cp.returncode == 0 and "UNKNOWN" not in cp.stdout
+       and len(splines) == 1 and "TARGET" in splines[0],
+       "--show on patched sppclose clean")
+    cp2 = run(spc, spc + ".2", "--only", "sppclose", "--no-spp-close")
+    ck(cp2.returncode == 0 and "Nothing to do" in cp2.stdout,
+       "sppclose idempotent")
+    cp3 = run(spc, os.path.join(OUTDIR, "v_spcback.bin"), "--only", "sppclose")
+    b3 = dec(os.path.join(OUTDIR, "v_spcback.bin")) if cp3.returncode == 0 else b""
+    ck(cp3.returncode == 0 and b3[o1:o1 + 4] == bytes.fromhex("c0ff40a7"),
+       "sppclose reverts to stock")
+# E10 combo: full multipoint recipe + spp_channel_disconnect no-op
+ce10 = os.path.join(OUTDIR, "v_e10.bin")
+cp = run(SRC, ce10, "--no-kick", "--conn-num=2", "--force-page-scan",
+         "--force-role-keep", "--no-disconnect-13", "--no-pairing-kick",
+         "--no-cleanup-kick", "--no-l2cap-teardown", "--no-spp-close",
+         "--PTT=BT-PTT", "--PTT2=BT-PTT2", "--OD-PTT=PTT")
+ck(cp.returncode == 0, "E10 combo build (E9 + --no-spp-close)")
+if cp.returncode == 0:
+    a = dec(ce10)
+    ck(g(a, P.NOKICK_VA, 4) == b"\x40\x23\x80\x00"
+       and g(a, P.CONN_NUM_VA, 2) == b"\x31\x25"
+       and g(a, P.PAGESCAN_VA, 4) == b"\x00\x00\x00\x00"
+       and g(a, P.ROLEKEEP_VA, 10) == bytes.fromhex("c0ea4502000000000000")
+       and g(a, P.DISC13_VA, 4) == b"\x00\x00\x00\x00"
+       and g(a, P.PAIRKICK_ALL_VA, 4) == b"\x00\x00\x00\x00"
+       and g(a, P.PAIRKICK_ONE_VA, 4) == b"\x00\x00\x00\x00"
+       and g(a, P.CLEANUPKICK_VAR_VA, 4) == b"\x00\x00\x00\x00"
+       and g(a, P.CLEANUPKICK_ORPHAN_VA, 4) == b"\x00\x00\x00\x00"
+       and g(a, P.CLEANUPKICK_PROF_VA, 4) == b"\x00\x00\x00\x00"
+       and g(a, P.L2CAPTEARDOWN_UI_VA, 4) == b"\x00\x00\x00\x00"
+       and g(a, P.L2CAPTEARDOWN_MODE_VA, 4) == b"\x00\x00\x00\x00"
+       and g(a, P.SPPCLOSE_VA, 4) == bytes.fromhex("40200004"),
+       "E10 combo carries all thirteen multipoint patches")
+
+# --- --no-l2cap-disconnect (multipoint experiment E11, ch.27 SS27.17) -------
+ld = os.path.join(OUTDIR, "v_l2capdisc.bin")
+cp = run(SRC, ld, "--only", "l2capdiscbranch", "--only", "l2capdiscentry",
+         "--no-l2cap-disconnect")
+ck(cp.returncode == 0, "--no-l2cap-disconnect build")
+if cp.returncode == 0:
+    a = dec(ld)
+    ck(g(a, P.L2CAPDISC_BRANCH_VA, 8) == bytes.fromhex("0000000000ff58b0"),
+       "0x4a dispatch branch -> nop;nop, falls through to default")
+    ck(g(a, P.L2CAPDISC_ENTRY_VA, 8) == bytes.fromhex("00238000b1fa0049"),
+       "l2cap_disconnect entry -> mov r0,#0; rts")
+    d = [i for i in range(len(stock)) if stock[i] != a[i]]
+    o1 = P.va_to_off(P.L2CAPDISC_BRANCH_VA)
+    o2 = P.va_to_off(P.L2CAPDISC_ENTRY_VA)
+    ck(len(d) == 8 and all(o1 <= i < o1 + 4 or o2 <= i < o2 + 4 for i in d),
+       "l2capdisc patch touches exactly 8 bytes (%s)" % [hex(x) for x in d])
+    cp = run(ld, "--show", "--no-l2cap-disconnect")
+    ldlines = [l for l in cp.stdout.splitlines() if l.startswith("l2capdisc")]
+    ck(cp.returncode == 0 and "UNKNOWN" not in cp.stdout
+       and len(ldlines) == 2 and all("TARGET" in l for l in ldlines),
+       "--show on patched l2capdisc clean")
+    cp2 = run(ld, ld + ".2", "--only", "l2capdiscbranch",
+              "--only", "l2capdiscentry", "--no-l2cap-disconnect")
+    ck(cp2.returncode == 0 and "Nothing to do" in cp2.stdout,
+       "l2capdisc idempotent")
+    cp3 = run(ld, os.path.join(OUTDIR, "v_ldback.bin"),
+              "--only", "l2capdiscbranch", "--only", "l2capdiscentry")
+    b3 = dec(os.path.join(OUTDIR, "v_ldback.bin")) if cp3.returncode == 0 else b""
+    ck(cp3.returncode == 0 and b3[o1:o1 + 4] == bytes.fromhex("0bf8d494")
+       and b3[o2:o2 + 4] == bytes.fromhex("1004bfea"),
+       "l2capdisc reverts to stock")
+# E11 combo: full multipoint recipe + L2CAP-level kill
+ce11 = os.path.join(OUTDIR, "v_e11.bin")
+cp = run(SRC, ce11, "--no-kick", "--conn-num=2", "--force-page-scan",
+         "--force-role-keep", "--no-disconnect-13", "--no-pairing-kick",
+         "--no-cleanup-kick", "--no-l2cap-teardown", "--no-spp-close",
+         "--no-l2cap-disconnect",
+         "--PTT=BT-PTT", "--PTT2=BT-PTT2", "--OD-PTT=PTT")
+ck(cp.returncode == 0, "E11 combo build (E10 + --no-l2cap-disconnect)")
+if cp.returncode == 0:
+    a = dec(ce11)
+    ck(g(a, P.NOKICK_VA, 4) == b"\x40\x23\x80\x00"
+       and g(a, P.CONN_NUM_VA, 2) == b"\x31\x25"
+       and g(a, P.PAGESCAN_VA, 4) == b"\x00\x00\x00\x00"
+       and g(a, P.ROLEKEEP_VA, 10) == bytes.fromhex("c0ea4502000000000000")
+       and g(a, P.DISC13_VA, 4) == b"\x00\x00\x00\x00"
+       and g(a, P.PAIRKICK_ALL_VA, 4) == b"\x00\x00\x00\x00"
+       and g(a, P.PAIRKICK_ONE_VA, 4) == b"\x00\x00\x00\x00"
+       and g(a, P.CLEANUPKICK_VAR_VA, 4) == b"\x00\x00\x00\x00"
+       and g(a, P.CLEANUPKICK_ORPHAN_VA, 4) == b"\x00\x00\x00\x00"
+       and g(a, P.CLEANUPKICK_PROF_VA, 4) == b"\x00\x00\x00\x00"
+       and g(a, P.L2CAPTEARDOWN_UI_VA, 4) == b"\x00\x00\x00\x00"
+       and g(a, P.L2CAPTEARDOWN_MODE_VA, 4) == b"\x00\x00\x00\x00"
+       and g(a, P.SPPCLOSE_VA, 4) == bytes.fromhex("40200004")
+       and g(a, P.L2CAPDISC_BRANCH_VA, 4) == b"\x00\x00\x00\x00"
+       and g(a, P.L2CAPDISC_ENTRY_VA, 4) == bytes.fromhex("00238000"),
+       "E11 combo carries all fifteen multipoint patches")
+
 # --- cleanup ----------------------------------------------------------------
 if not fail and not KEEP:
     shutil.rmtree(OUTDIR)

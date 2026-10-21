@@ -215,12 +215,19 @@ size shrunk via `VM_LEN` semantics before use.
   up), but a second *physical* device evicts the first — the cap is the app's
   single-active-device policy, not the stack build. Next: reverse-order 2-ACL test +
   locate the eviction path.
-- **New:** H3 entry point is `0x1E00100` but the SDK default `CONFIG_ENTRY_ADDRESS` is
-  `0x1E00120` — TIDRADIO overrode it (or an older SDK default). Cosmetic, but worth a
-  version fingerprint across v44/v45/v50.
+- ~~H3 entry point is `0x1E00100` but the SDK default `CONFIG_ENTRY_ADDRESS` is
+  `0x1E00120`~~ **ANSWERED 2026-10-21** ([§28.7](28-sdk-forks-survey.md#287--git-history-deep-dive-2026-10-21-every-fork-every-commit)):
+  the Acy19888 fork's board configs show the mechanism — `CONFIG_ENTRY_ADDRESS` in
+  `board_ac635n_demo_global_build_cfg.h` feeds both the `sdk_ld.c` `CODE_BEG` and the
+  `ENTRY` key in `isd_config.ini`; AC635N SDK default is base `0x1E00000` + `0x120`.
+  Our `0x1E00100` is a **TID override of this build-config knob** (or an older SDK
+  default) — a linker setting, not a hardware fact. Version fingerprint across
+  v44/v45/v50 still trivially open (cosmetic).
 - **New:** feasibility build test — compile `apps/spp_and_le` (or `hid`) for br23 with the
   Linux toolchain to prove we can *build* for the chip (a prerequisite for any eventual
-  SDK-rebuild route for true multipoint).
+  SDK-rebuild route for true multipoint). **Route fully de-risked 2026-10-21** —
+  third-party Linux CI build + complete gotcha catalog + native-Linux `isd_download`
+  packaging: [Ch. 28 §28.4/§28.7](28-sdk-forks-survey.md).
 - **New:** `UNENC_ADRH/L` (SFCENC) + `LENC_ADRH/L` windows: worth a hardware experiment —
   an unencrypted window would let a patched region run with ENC off for that range.
 - Route B (erased flash beyond app end) is now **deprioritized**: it is VM-reserved (§24.6).

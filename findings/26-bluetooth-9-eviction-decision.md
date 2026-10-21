@@ -164,12 +164,17 @@ One encouraging detail: the stack's **profile-channel table has 2 entries**
 (`0x1A5B8…0x1A5F0`, stride `0x1C`) even in the single-device build — the profile layer
 was sized for two links; only the `conn_info` layer is one deep.
 
+> **Corrected 2026-10-06 (ch. 27 §27.2/§27.3):** the middle row is wrong for our build —
+> the vendor compiled **2 `conn_info` slots** (that "profile-channel table" *is* the
+> conn array) plus 2 RFCOMM muxes / 6 svc / 6 ch / 20 L2CAP channels. The `create_bt_new_conn`
+> NULL-when-full behavior still holds in the IR, but the slot is not the binding constraint.
+
 ## §26.7 — Options for getting multipoint working
 
 Goal (restated): headset (HFP audio) + TID-PTT button (SPP `+SPP=P/R`) on one radio
 simultaneously; "first or last connected wins" acceptable for the *controlling* device.
 
-### Option A — kick-NOP experiment (cheap, one flash) — **UNTESTED**
+### Option A — kick-NOP experiment (cheap, one flash) — **TESTED 2026-10-05: kick dead; page-scan is the next gate → §26.9**
 
 Make the app's kick a no-op and keep `--conn-num=2` (so page scan stays enabled).
 **Implemented 2026-10-04** as `--no-kick` in the patch tool (kick early-return
@@ -251,6 +256,11 @@ stack's connection table. Only meaningful combined with C.
    research vehicles toward it.
 
 ## §26.8 — Open questions
+
+> **Status 2026-10-21:** Q2 still open. Q3 answered: pairing-mode/new-device flows do **not**
+> use the kick — they close the incumbent one layer up (reason-`0x16` dispatcher sites, then
+> the L2CAP/SPP channel-close chain — ch. 27 §27.12–§27.17). Q4 partially mapped via E-era
+> work (`state 4` = "disconnecting" still shallow). Full address map: [ch. 29](29-static-analysis-reference-map.md).
 
 - ~~Does the app's SPP RX path accept data from a link with no `conn_info`?~~
   Superseded by §26.9: the stack's conn pool has 20 entries — a second link gets

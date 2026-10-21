@@ -1012,6 +1012,246 @@ DISC13_LABELS = {
     "disabled": "nop; nop (app 0x13 disconnects disabled; E6 HW-confirmed)",
 }
 
+# --------------------------------------------------------------------------
+# --no-pairing-kick (EXPERIMENTAL / UNTESTED): disable the app's reason-0x16
+# disconnect-all executor used by the PAIRING / new-device flow.
+#
+# E6 HW evidence (2026-10-08, user report): with --no-disconnect-13 active,
+# joining an ALREADY-PAIRED device no longer evicts the incumbent link - but
+# putting the radio in pairing mode and pressing "connect" on a NEW device
+# still kicks it. That path uses the stack BT-task dispatcher 0x01E21AF8's
+# reason-0x16 sites, which call the thunk 0x01E19492 (a bare `goto
+# 0x01E07B08`, the same disconnect wrapper as the 0x13 path):
+#   0x01E21DE4 - inside the disconnect-ALL loop over the 2-slot conn array
+#                (stride 0x1C, in-used bit 0x20000000 of the word at +0xC);
+#                after the call it sets the "was connected" flag r5=1 and
+#                continues, then resets scan state. NOP-ing the call leaves
+#                the loop and scan reset intact.
+#   0x01E21EC4 - single disconnect(handle, 0x16) from a message field
+#                (handle at msg+6); NOP-ing falls through to the return.
+# E6 proved OUTGOING pages while connected work (radio paged the headset
+# while the PC held SPP), so pairing a new device without freeing the
+# incumbent link has a real chance. SIDE EFFECTS: any action that uses
+# these paths (pairing-mode teardown, explicit 0x16 disconnect commands)
+# no longer releases links; power-cycle instead. Combine with the full
+# multipoint recipe (--conn-num=2 --no-kick --force-page-scan
+# --no-disconnect-13).
+# --------------------------------------------------------------------------
+PAIRKICK_ALL_VA = 0x01E21DE4
+PAIRKICK_ONE_VA = 0x01E21EC4
+PAIRKICK_ALL_CTX = bytes.fromhex("bfea55bb4521c63c")
+PAIRKICK_ONE_CTX = bytes.fromhex("bfeae5ba059400e1")
+PAIRKICK_ALL_STATES = {
+    "stock": bytes.fromhex("bfea55bb"),
+    "disabled": bytes.fromhex("00000000"),  # nop; nop -> never disconnects
+}
+PAIRKICK_ONE_STATES = {
+    "stock": bytes.fromhex("bfeae5ba"),
+    "disabled": bytes.fromhex("00000000"),  # nop; nop -> never disconnects
+}
+PAIRKICK_LABELS = {
+    "stock": "call disconnect(..., 0x16) (pairing kick active)",
+    "disabled": "nop; nop (app 0x16 pairing kick disabled; UNTESTED)",
+}
+
+# --------------------------------------------------------------------------
+# --no-cleanup-kick (EXPERIMENTAL / UNTESTED): disable the THREE remaining
+# 0x13-capable callers of the disconnect wrapper 0x01E07B08 (via thunk
+# 0x01E19492) - the last host-side disconnect executors left after
+# --no-disconnect-13 and --no-pairing-kick.
+#
+# V2b HW evidence (2026-10-19, user capture /tmp/e7v.hcd): with the FULL E7
+# image (readback-verified), PC incumbent on SPP, Paired -> TID-PTT ->
+# Connect still evicted the PC: graceful L2CAP Disconnection Request +
+# Disconnect Complete reason 0x13 - the same E3 signature, so the kick runs
+# through an executor that is NOT the NOP-ed 0x01E178CE. The remaining
+# 0x13-capable wrapper callers (funnel analysis, ch. 27 SS 27.13):
+#   0x01E19AD0 - stack event handler FUN_01e19a78 (events forwarded by the
+#                HCI pump 0x01E19E44), jumptable case: disconnect(handle,
+#                reason = message byte) - VARIABLE reason from the message.
+#   0x01E19B14 - same handler, subtype 0x73: disconnect(handle, 0x13) for
+#                any handle not tracked with state 1 in the conn list
+#                (orphan-ACL cleanup).
+#   0x01E20AB2 - profile-record state machine FUN_01e20962 (callback
+#                registered at file 0x018C90): disconnect(record.handle,
+#                0x13) for profile types &2 or ==0x40, then clears record.
+# E8 NOPs all three. If the kick survives E8, E9 = wrapper-entry early
+# return at 0x01E07B08 (kills ALL host disconnects); if THAT survives it,
+# the teardown bypasses the wrapper (direct HCI senders, ch. 27 SS 27.4).
+# SIDE EFFECTS: orphan/profile cleanup paths no longer release links;
+# power-cycle instead. Combine with the full multipoint recipe.
+# --------------------------------------------------------------------------
+CLEANUPKICK_VAR_VA = 0x01E19AD0
+CLEANUPKICK_ORPHAN_VA = 0x01E19B14
+CLEANUPKICK_PROF_VA = 0x01E20AB2
+CLEANUPKICK_VAR_CTX = bytes.fromhex("bfeadffc649d5016")
+CLEANUPKICK_ORPHAN_CTX = bytes.fromhex("bfeabdfc549d84f9")
+CLEANUPKICK_PROF_CTX = bytes.fromhex("bfeaeec4486261ff")
+CLEANUPKICK_VAR_STATES = {
+    "stock": bytes.fromhex("bfeadffc"),
+    "disabled": bytes.fromhex("00000000"),  # nop; nop -> never disconnects
+}
+CLEANUPKICK_ORPHAN_STATES = {
+    "stock": bytes.fromhex("bfeabdfc"),
+    "disabled": bytes.fromhex("00000000"),  # nop; nop -> never disconnects
+}
+CLEANUPKICK_PROF_STATES = {
+    "stock": bytes.fromhex("bfeaeec4"),
+    "disabled": bytes.fromhex("00000000"),  # nop; nop -> never disconnects
+}
+CLEANUPKICK_LABELS = {
+    "stock": "call disconnect(...) (cleanup kick active)",
+    "disabled": "nop; nop (cleanup 0x13 disconnect disabled; UNTESTED)",
+}
+
+# --------------------------------------------------------------------------
+# --no-l2cap-teardown (EXPERIMENTAL / UNTESTED): stop the app's L2CAP
+# channel-close that fires on every "Paired -> Connect" (and on routing-mode
+# changes) - the eviction layer that survived E6/E7/E8.
+#
+# E8 HW evidence (2026-10-19, capture /tmp/e8.hcd): with ALL HCI disconnect
+# executors NOP-ed (readback-verified), Paired -> TID-PTT -> Connect still
+# killed the PC: the radio sent an L2CAP Disconnection Request (ident 17,
+# DCID 64, SCID 67) on the live RFCOMM channel; the PC's bluetoothd then
+# dropped the now-useless ACL (Disconnect Complete 0x16 LOCAL). The HCI-level
+# kick is GONE - this close is one protocol layer higher.
+#
+# Mechanism (ch. 27 SS 27.15): user_send_cmd_prepare(0x4a) -> dispatcher
+# 0x01E1792E branch 0x01E17B20 = l2cap_disconnect_all_channel() inlined -
+# walks the channel list, forces each channel to state 0xd and pumps
+# l2cap_run (FUN_01e16f60), which for state 0xd sends the L2CAP Disconnect
+# Request (sig code 6). Pure L2CAP, synchronous at button-press. Only two
+# posters of 0x4a exist (census of all 67 dispatcher call sites):
+#   0x01E61E22 - FUN_01e60e44 "connect selected device" UI handler
+#                (Paired -> MORE -> Connect). UNCONDITIONAL. NOP-ing the
+#                call is fall-through safe (next insn reloads r0); the
+#                connect-pending bit and the 0xc/0xe/0x12/5 posts remain,
+#                so the outgoing page still happens.
+#   0x01E60188 - FUN_01e60120 routing-mode setter; posts 0x4a only when the
+#                routing mode CHANGES while a link is active (e.g. BT-PTT
+#                mode switch after a join). NOP-ed too, for the link-up case.
+# SIDE EFFECTS: the app never tears down L2CAP/RFCOMM channels on these
+# flows; stale channels persist until power-cycle (the E6 malformed-AT+MPTT
+# side effect remains). The pre-page settle delay inside the 0x4a body is
+# lost (page starts marginally earlier; low risk).
+# --------------------------------------------------------------------------
+L2CAPTEARDOWN_UI_VA = 0x01E61E22
+L2CAPTEARDOWN_MODE_VA = 0x01E60188
+L2CAPTEARDOWN_UI_CTX = bytes.fromhex("bdea84ad506b804b")
+L2CAPTEARDOWN_MODE_CTX = bytes.fromhex("bdead1bb048dbdea")
+L2CAPTEARDOWN_UI_STATES = {
+    "stock": bytes.fromhex("bdea84ad"),
+    "disabled": bytes.fromhex("00000000"),  # nop; nop -> no channel close
+}
+L2CAPTEARDOWN_MODE_STATES = {
+    "stock": bytes.fromhex("bdead1bb"),
+    "disabled": bytes.fromhex("00000000"),  # nop; nop -> no channel close
+}
+L2CAPTEARDOWN_LABELS = {
+    "stock": "call user_send_cmd_prepare(0x4a) (L2CAP teardown active)",
+    "disabled": "nop; nop (L2CAP channel-close disabled; UNTESTED)",
+}
+
+# --------------------------------------------------------------------------
+# --no-spp-close (EXPERIMENTAL / UNTESTED): no-op the app's
+# spp_channel_disconnect() - the primitive that actually sent the E8/E9
+# L2CAP Disconnection Requests against the incumbent's SPP channel.
+#
+# E9 HW evidence (2026-10-20, capture /tmp/e9.hcd): with BOTH 0x4a posters
+# NOP-ed (readback-verified, all twelve sites in the decrypted image),
+# Paired -> TID-PTT -> Connect STILL closed the PC's SPP channel (L2CAP
+# Disconnection Request ident 20, DCID 64, SCID 69; PC bluetoothd then
+# dropped the ACL locally, 0x16/MGMT 0x02 - HCI-level still dead).
+#
+# Root cause (ch. 27 SS 27.16): the close funnels through FUN_01E173EC =
+# spp_channel_disconnect() - reads the SPP control block 0x1A740, takes the
+# live SPP L2CAP CID at [cb+2] and forces that channel to state 0xd via
+# FUN_01E173D0 (l2cap_disconnect(cid)), which pumps l2cap_run -> L2CAP
+# Disconnect Request. Press-time routes that reach it: (1) the connect SM
+# calls spp_connect (FUN_01E1750C): if the SPP CID field is BUSY (the PC
+# holds it) it CLOSES the incumbent channel and returns -2 to retry
+# (call 0x01E1751E) - the single-SPP-session chokepoint; (2) the stack
+# posts 0xB (DISCONN_SDP_MASTER) -> dispatcher case 0xB -> FUN_01E1782C
+# mode 1 -> call 0x01E1786C. THIS ALSO FIXES THE "CLASS DEPENDENCE":
+# TID-PTT is an SPP target -> spp_connect -> close; Jabra is HFP -> no
+# SPP site runs -> no close (E6). Target PROFILE, not device class.
+#
+# Patch: entry no-op at 0x01E173EE (after `push rets`): stock
+# `c0 ff 40 a7` (mov r0,#0x1a740) -> `40 20 00 04` (mov r0,#0; pop pc) =
+# return 0, close nothing. Callers tolerate it: spp_connect's busy path
+# returns -2 without closing (retries harmlessly, return value ignored at
+# 0x01E20F16); the 0xB mode-1 path returns 0. The outgoing page is NOT
+# blocked (it runs through the scan SM + the 0xc/0xe/0x12/5 posts).
+# E6 sanity: the fresh-pairing flow never calls spp_connect/0xB ->
+# unchanged.
+# SIDE EFFECTS: the app can never tear down the SPP channel on these
+# flows; stale SPP sessions persist until power-cycle. NEXT WALL after
+# this patch: the single SPP session itself (control block 0x1A740) -
+# the TID-PTT's SPP cannot bind while the PC's holds the CID.
+# --------------------------------------------------------------------------
+SPPCLOSE_VA = 0x01E173EE
+SPPCLOSE_CTX = bytes.fromhex("c0ff40a701000060")
+SPPCLOSE_STATES = {
+    "stock": bytes.fromhex("c0ff40a7"),
+    "disabled": bytes.fromhex("40200004"),  # mov r0,#0; pop pc -> return 0
+}
+SPPCLOSE_LABELS = {
+    "stock": "spp_channel_disconnect() active",
+    "disabled": "mov r0,#0; rts (spp_channel_disconnect disabled; UNTESTED)",
+}
+
+# --------------------------------------------------------------------------
+# --no-l2cap-disconnect (EXPERIMENTAL / UNTESTED): the L2CAP-level kill of
+# the channel-close eviction - two sites that together cover every app path
+# that can tear down an incumbent's L2CAP channels on a device switch.
+#
+# E10 HW evidence (2026-10-20, capture /tmp/e10.hcd): with spp_close and
+# BOTH 0x4a posters NOP-ed (readback-verified), Paired -> TID-PTT -> Connect
+# STILL closed the PC link - and this time the radio sent TWO L2CAP
+# Disconnection Requests (ident 6 CID 65 + ident 7 CID 64, handle 1):
+# ALL channels on the link, the signature of the l2cap_disconnect_all_
+# channel walk, not the single-CID SPP path. The walk bypasses
+# spp_channel_disconnect entirely (forces each channel state 0xd + pumps
+# l2cap_run), and E9 only NOP-ed the two known POSTERS of 0x4a - the
+# dispatcher branch itself and the direct l2cap_disconnect() callers
+# (four in the SPP state machine, 0x01E235B8/0x01E2376A/0x01E23A50/
+# 0x01E23BF4) remain live.
+#
+# Patch site 1: NOP the `je r11,#0x4a,0x01e17b20` dispatch branch at
+#   0x01E17974 (stock `0b f8 d4 94` -> `00 00 00 00`). Code 0x4a now falls
+#   through the je-chain to the default no-op (returns 0, debug-ring log
+#   only) for EVERY caller, including any poster the E9 census missed.
+#   Fall-through safe: next insn @0x01E17978 is the chain's next je.
+# Patch site 2: entry no-op of l2cap_disconnect() at 0x01E173D0 (stock
+#   `10 04 bf ea` -> `00 23 80 00` = mov r0,#0; rts). Kills every direct
+#   caller at once (the four SPP-SM sites above + spp_channel_disconnect,
+#   already NOP-ed by --no-spp-close, + any other). Return 0 = success:
+#   callers advance their state machines while the channel stays open.
+#   Pointer scan: no 32-bit LE refs to either address (direct calls only).
+# SIDE EFFECTS: the app can never tear down ANY L2CAP channel (RFCOMM/AVDTP
+# included) through these paths; stale channels persist until power-cycle.
+# The 0x4a body's bookkeeping (FUN_01e16878 query + delays) is skipped -
+# it sent nothing else. NEXT WALL if the close persists: something forces
+# channel state 0xd + pumps l2cap_run outside both sites (deeper walk in
+# the stack task; would need the l2cap_run send-gate itself).
+# --------------------------------------------------------------------------
+L2CAPDISC_BRANCH_VA = 0x01E17974
+L2CAPDISC_ENTRY_VA = 0x01E173D0
+L2CAPDISC_BRANCH_CTX = bytes.fromhex("0bf8d49400ff58b0")
+L2CAPDISC_ENTRY_CTX = bytes.fromhex("1004bfeab1fa0049")
+L2CAPDISC_BRANCH_STATES = {
+    "stock": bytes.fromhex("0bf8d494"),
+    "disabled": bytes.fromhex("00000000"),  # nop; nop -> 0x4a falls to default
+}
+L2CAPDISC_ENTRY_STATES = {
+    "stock": bytes.fromhex("1004bfea"),
+    "disabled": bytes.fromhex("00238000"),  # mov r0,#0; rts -> disconnect no-op
+}
+L2CAPDISC_LABELS = {
+    "stock": "l2cap disconnect path active",
+    "disabled": "nop / mov r0,#0; rts (l2cap disconnect disabled; UNTESTED)",
+}
+
 # Kept for tools/verify_actions.py: the native body addresses.
 ODPTT_PRESS_VA = PF_BODY8_VA
 ODPTT_RELEASE_VA = REL_OD_BODY_VA
@@ -1250,7 +1490,10 @@ def _ctx_variant_fn(va, ctx_va, ctx_base):
 
 def build_patches(duplex_mode=4, ptt2_action="PTT2", odptt_action="OD-PTT",
                   conn_num=None, no_kick=False, force_page_scan=False,
-                  force_role_keep=False, no_disconnect_13=False):
+                  force_role_keep=False, no_disconnect_13=False,
+                  no_pairing_kick=False, no_cleanup_kick=False,
+                  no_l2cap_teardown=False, no_spp_close=False,
+                  no_l2cap_disconnect=False):
     """Return the patch table, with the `duplex` patch's target selected by
     `duplex_mode` (see DUPLEX_LABELS) and the `pflabels` multi-patch built
     for the (--PTT2, --OD-PTT) action pair (see PF_COMBO_PATCHES). The
@@ -1262,8 +1505,17 @@ def build_patches(duplex_mode=4, ptt2_action="PTT2", odptt_action="OD-PTT",
     `force_page_scan` keeps page scan enabled while connected (see
     PAGESCAN_VA); `force_role_keep` forces the ACL accept role to keep-role
     (see ROLEKEEP_VA); `no_disconnect_13` disables the app's reason-0x13
-    disconnect executor (see DISC13_VA). All entries are always present so
-    --show recognises all states."""
+    disconnect executor (see DISC13_VA); `no_pairing_kick` disables the
+    app's reason-0x16 pairing disconnect-all executor (see
+    PAIRKICK_ALL_VA / PAIRKICK_ONE_VA); `no_cleanup_kick` disables the three
+    remaining 0x13-capable cleanup executors (see CLEANUPKICK_VAR_VA /
+    CLEANUPKICK_ORPHAN_VA / CLEANUPKICK_PROF_VA); `no_l2cap_teardown` stops
+    the app's L2CAP channel-close posters of user_send_cmd_prepare(0x4a)
+    (see L2CAPTEARDOWN_UI_VA / L2CAPTEARDOWN_MODE_VA); `no_spp_close` no-ops
+    spp_channel_disconnect() (see SPPCLOSE_VA); `no_l2cap_disconnect` kills
+    the 0x4a dispatch branch and the l2cap_disconnect() entry (see
+    L2CAPDISC_BRANCH_VA / L2CAPDISC_ENTRY_VA). All entries are always
+    present so --show recognises all states."""
     if duplex_mode not in DUPLEX_STATES:
         raise SystemExit("--bluetooth-mode must be one of %s" % sorted(DUPLEX_STATES))
     validate_pf_combo(ptt2_action, odptt_action)
@@ -1355,6 +1607,138 @@ def build_patches(duplex_mode=4, ptt2_action="PTT2", odptt_action="OD-PTT",
         "ctx_base": DISC13_CTX,
         "ctx_variant": _ctx_variant_fn(DISC13_VA, DISC13_CTX_VA,
                                        DISC13_CTX),
+    }
+    pk = "disabled" if no_pairing_kick else "stock"
+    patches["pairkickall"] = {
+        "desc": "app pairing kick, disconnect-all loop (0x01E21DE4) -> %s" % pk,
+        "va": PAIRKICK_ALL_VA,
+        "new": PAIRKICK_ALL_STATES[pk],
+        "states": PAIRKICK_ALL_STATES,
+        "labels": PAIRKICK_LABELS,
+        "target": pk,
+        "ctx_va": PAIRKICK_ALL_VA,
+        "ctx_base": PAIRKICK_ALL_CTX,
+        "ctx_variant": _ctx_variant_fn(PAIRKICK_ALL_VA, PAIRKICK_ALL_VA,
+                                       PAIRKICK_ALL_CTX),
+    }
+    patches["pairkickone"] = {
+        "desc": "app pairing kick, single disconnect (0x01E21EC4) -> %s" % pk,
+        "va": PAIRKICK_ONE_VA,
+        "new": PAIRKICK_ONE_STATES[pk],
+        "states": PAIRKICK_ONE_STATES,
+        "labels": PAIRKICK_LABELS,
+        "target": pk,
+        "ctx_va": PAIRKICK_ONE_VA,
+        "ctx_base": PAIRKICK_ONE_CTX,
+        "ctx_variant": _ctx_variant_fn(PAIRKICK_ONE_VA, PAIRKICK_ONE_VA,
+                                       PAIRKICK_ONE_CTX),
+    }
+    ck = "disabled" if no_cleanup_kick else "stock"
+    patches["cleanupkickvar"] = {
+        "desc": "app cleanup kick, variable-reason event (0x01E19AD0) -> %s" % ck,
+        "va": CLEANUPKICK_VAR_VA,
+        "new": CLEANUPKICK_VAR_STATES[ck],
+        "states": CLEANUPKICK_VAR_STATES,
+        "labels": CLEANUPKICK_LABELS,
+        "target": ck,
+        "ctx_va": CLEANUPKICK_VAR_VA,
+        "ctx_base": CLEANUPKICK_VAR_CTX,
+        "ctx_variant": _ctx_variant_fn(CLEANUPKICK_VAR_VA, CLEANUPKICK_VAR_VA,
+                                       CLEANUPKICK_VAR_CTX),
+    }
+    patches["cleanupkickorphan"] = {
+        "desc": "app cleanup kick, orphan-ACL cleanup (0x01E19B14) -> %s" % ck,
+        "va": CLEANUPKICK_ORPHAN_VA,
+        "new": CLEANUPKICK_ORPHAN_STATES[ck],
+        "states": CLEANUPKICK_ORPHAN_STATES,
+        "labels": CLEANUPKICK_LABELS,
+        "target": ck,
+        "ctx_va": CLEANUPKICK_ORPHAN_VA,
+        "ctx_base": CLEANUPKICK_ORPHAN_CTX,
+        "ctx_variant": _ctx_variant_fn(CLEANUPKICK_ORPHAN_VA,
+                                       CLEANUPKICK_ORPHAN_VA,
+                                       CLEANUPKICK_ORPHAN_CTX),
+    }
+    patches["cleanupkickprof"] = {
+        "desc": "app cleanup kick, profile-record cleanup (0x01E20AB2) -> %s" % ck,
+        "va": CLEANUPKICK_PROF_VA,
+        "new": CLEANUPKICK_PROF_STATES[ck],
+        "states": CLEANUPKICK_PROF_STATES,
+        "labels": CLEANUPKICK_LABELS,
+        "target": ck,
+        "ctx_va": CLEANUPKICK_PROF_VA,
+        "ctx_base": CLEANUPKICK_PROF_CTX,
+        "ctx_variant": _ctx_variant_fn(CLEANUPKICK_PROF_VA,
+                                       CLEANUPKICK_PROF_VA,
+                                       CLEANUPKICK_PROF_CTX),
+    }
+    lt = "disabled" if no_l2cap_teardown else "stock"
+    patches["l2capteardownui"] = {
+        "desc": "app L2CAP teardown, connect-UI 0x4a post (0x01E61E22) -> %s" % lt,
+        "va": L2CAPTEARDOWN_UI_VA,
+        "new": L2CAPTEARDOWN_UI_STATES[lt],
+        "states": L2CAPTEARDOWN_UI_STATES,
+        "labels": L2CAPTEARDOWN_LABELS,
+        "target": lt,
+        "ctx_va": L2CAPTEARDOWN_UI_VA,
+        "ctx_base": L2CAPTEARDOWN_UI_CTX,
+        "ctx_variant": _ctx_variant_fn(L2CAPTEARDOWN_UI_VA,
+                                       L2CAPTEARDOWN_UI_VA,
+                                       L2CAPTEARDOWN_UI_CTX),
+    }
+    patches["l2capteardownmode"] = {
+        "desc": "app L2CAP teardown, mode-setter 0x4a post (0x01E60188) -> %s" % lt,
+        "va": L2CAPTEARDOWN_MODE_VA,
+        "new": L2CAPTEARDOWN_MODE_STATES[lt],
+        "states": L2CAPTEARDOWN_MODE_STATES,
+        "labels": L2CAPTEARDOWN_LABELS,
+        "target": lt,
+        "ctx_va": L2CAPTEARDOWN_MODE_VA,
+        "ctx_base": L2CAPTEARDOWN_MODE_CTX,
+        "ctx_variant": _ctx_variant_fn(L2CAPTEARDOWN_MODE_VA,
+                                       L2CAPTEARDOWN_MODE_VA,
+                                       L2CAPTEARDOWN_MODE_CTX),
+    }
+    sc = "disabled" if no_spp_close else "stock"
+    patches["sppclose"] = {
+        "desc": "app spp_channel_disconnect() entry (0x01E173EE) -> %s" % sc,
+        "va": SPPCLOSE_VA,
+        "new": SPPCLOSE_STATES[sc],
+        "states": SPPCLOSE_STATES,
+        "labels": SPPCLOSE_LABELS,
+        "target": sc,
+        "ctx_va": SPPCLOSE_VA,
+        "ctx_base": SPPCLOSE_CTX,
+        "ctx_variant": _ctx_variant_fn(SPPCLOSE_VA,
+                                       SPPCLOSE_VA,
+                                       SPPCLOSE_CTX),
+    }
+    ld = "disabled" if no_l2cap_disconnect else "stock"
+    patches["l2capdiscbranch"] = {
+        "desc": "app 0x4a dispatch branch (0x01E17974) -> %s" % ld,
+        "va": L2CAPDISC_BRANCH_VA,
+        "new": L2CAPDISC_BRANCH_STATES[ld],
+        "states": L2CAPDISC_BRANCH_STATES,
+        "labels": L2CAPDISC_LABELS,
+        "target": ld,
+        "ctx_va": L2CAPDISC_BRANCH_VA,
+        "ctx_base": L2CAPDISC_BRANCH_CTX,
+        "ctx_variant": _ctx_variant_fn(L2CAPDISC_BRANCH_VA,
+                                       L2CAPDISC_BRANCH_VA,
+                                       L2CAPDISC_BRANCH_CTX),
+    }
+    patches["l2capdiscentry"] = {
+        "desc": "app l2cap_disconnect() entry (0x01E173D0) -> %s" % ld,
+        "va": L2CAPDISC_ENTRY_VA,
+        "new": L2CAPDISC_ENTRY_STATES[ld],
+        "states": L2CAPDISC_ENTRY_STATES,
+        "labels": L2CAPDISC_LABELS,
+        "target": ld,
+        "ctx_va": L2CAPDISC_ENTRY_VA,
+        "ctx_base": L2CAPDISC_ENTRY_CTX,
+        "ctx_variant": _ctx_variant_fn(L2CAPDISC_ENTRY_VA,
+                                       L2CAPDISC_ENTRY_VA,
+                                       L2CAPDISC_ENTRY_CTX),
     }
     for name, (va, ctx_va, ctx_hex, native, spp, what) in KEYCODE_PATCHES.items():
         states = {"native": bytes([0x48, native]), "spp": bytes([0x48, spp])}
@@ -1997,6 +2381,92 @@ def main():
         "link state.",
     )
     ap.add_argument(
+        "--no-pairing-kick",
+        dest="no_pairing_kick",
+        action="store_true",
+        help="MULTIPOINT (EXPERIMENTAL / UNTESTED): additionally NOP the "
+        "app's reason-0x16 pairing disconnect-all executor (call sites "
+        "0x01E21DE4 in the conn-array disconnect-all loop and 0x01E21EC4 "
+        "single 0x16 disconnect, both via thunk 0x01E19492 -> 0x01E07B08). "
+        "E6 showed already-paired joins no longer evict, but pairing-mode "
+        "'connect' on a new device still kicks the incumbent via this path; "
+        "NOP-ing it lets the radio page a new device while keeping the "
+        "existing link (outgoing pages while connected are E6-proven). "
+        "SIDE EFFECTS: pairing-mode teardown and 0x16 disconnect commands "
+        "no longer release links; power-cycle instead. Requires the full "
+        "multipoint recipe.",
+    )
+    ap.add_argument(
+        "--no-cleanup-kick",
+        dest="no_cleanup_kick",
+        action="store_true",
+        help="MULTIPOINT (EXPERIMENTAL / UNTESTED): additionally NOP the "
+        "three remaining 0x13-capable disconnect executors that call the "
+        "wrapper 0x01E07B08 via thunk 0x01E19492: 0x01E19AD0 (stack event "
+        "handler, variable reason from message), 0x01E19B14 (subtype-0x73 "
+        "orphan-ACL cleanup) and 0x01E20AB2 (profile-record cleanup in "
+        "FUN_01e20962). V2b evidence: with E7 flashed and readback-"
+        "verified, Paired->TID-PTT->Connect still evicted the PC incumbent "
+        "with reason 0x13, so the kick runs through one of these (ch. 27 "
+        "SS 27.13/27.14; experiment E8, UNTESTED). SIDE EFFECTS: orphan "
+        "and profile cleanup paths no longer release links; power-cycle "
+        "instead. Requires the full multipoint recipe.",
+    )
+    ap.add_argument(
+        "--no-l2cap-teardown",
+        dest="no_l2cap_teardown",
+        action="store_true",
+        help="MULTIPOINT (EXPERIMENTAL / UNTESTED): stop the app's L2CAP "
+        "channel-close (the eviction layer that survived E6/E7/E8). NOPs "
+        "the two user_send_cmd_prepare(0x4a) posts: 0x01E61E22 in the "
+        "Paired->Connect UI handler (unconditional) and 0x01E60188 in the "
+        "routing-mode setter (mode change while a link is active). 0x4a "
+        "runs l2cap_disconnect_all_channel(): it forces every open L2CAP "
+        "channel to state 0xd and pumps l2cap_run, which sends the L2CAP "
+        "Disconnection Request seen in the E8 capture while the HCI-level "
+        "kicks were already dead (ch. 27 SS 27.15; experiment E9, "
+        "UNTESTED). The outgoing page still happens (connect-pending bit "
+        "and the 0xc/0xe/0x12/5 posts remain). SIDE EFFECTS: the app never "
+        "tears down L2CAP/RFCOMM channels on these flows; stale channels "
+        "persist until power-cycle. Requires the full multipoint recipe.",
+    )
+    ap.add_argument(
+        "--no-spp-close",
+        dest="no_spp_close",
+        action="store_true",
+        help="MULTIPOINT (EXPERIMENTAL / UNTESTED): no-op the app "
+        "spp_channel_disconnect() entry (0x01E173EC) — the primitive that "
+        "sent the E8/E9 L2CAP Disconnection Requests against the incumbent "
+        "SPP channel (SPP control block 0x1A740, live CID at [cb+2] forced "
+        "to state 0xd via l2cap_disconnect -> l2cap_run). E9 evidence: both "
+        "0x4a posters NOP-ed, the close STILL happened; root cause = the "
+        "single-SPP-session chokepoint spp_connect (0x01E1750c) closes the "
+        "incumbent CID then retries, plus the 0xB DISCONN_SDP_MASTER path. "
+        "Entry no-op mov r0,#0; rts; outgoing page unaffected; pairing flow "
+        "unchanged. SIDE EFFECTS: stale SPP sessions until power-cycle. "
+        "NEXT WALL: single SPP session — a second SPP device may not bind "
+        "(ch. 27 SS 27.16; experiment E10, UNTESTED). Requires the full "
+        "multipoint recipe.",
+    )
+    ap.add_argument(
+        "--no-l2cap-disconnect",
+        dest="no_l2cap_disconnect",
+        action="store_true",
+        help="MULTIPOINT (EXPERIMENTAL / UNTESTED): the L2CAP-level kill "
+        "of the channel-close eviction (the layer that survived E6-E10). "
+        "NOPs the `je r11,#0x4a` dispatch branch at 0x01E17974 (code 0x4a "
+        "-> default no-op for EVERY caller, incl. posters E9 missed) and "
+        "entry-no-ops l2cap_disconnect() at 0x01E173D0 (mov r0,#0; rts - "
+        "kills all direct callers incl. the four SPP-state-machine sites). "
+        "E10 evidence: with --no-spp-close and both 0x4a posters NOP-ed, "
+        "Paired->Connect still closed ALL channels on the PC link (two "
+        "L2CAP Disconnection Requests, CIDs 64+65) - the all-channel walk "
+        "bypasses spp_channel_disconnect (ch. 27 SS 27.17; experiment E11). "
+        "SIDE EFFECTS: the app can never tear down any L2CAP channel; "
+        "stale channels persist until power-cycle. Requires the full "
+        "multipoint recipe.",
+    )
+    ap.add_argument(
         "--sectors",
         metavar="PREFIX",
         help="also export the changed 4 KiB flash sectors as PREFIX_<addr>.bin "
@@ -2020,7 +2490,10 @@ def main():
 
     PATCHES = build_patches(args.bluetooth_mode, a7, a8, args.conn_num,
                             args.no_kick, args.force_page_scan,
-                            args.force_role_keep, args.no_disconnect_13)
+                            args.force_role_keep, args.no_disconnect_13,
+                            args.no_pairing_kick, args.no_cleanup_kick,
+                            args.no_l2cap_teardown, args.no_spp_close,
+                            args.no_l2cap_disconnect)
 
     raw, app, app_start = load_app(args.src)
     print("source: %s (%d bytes)" % (args.src, len(raw)))
@@ -2039,6 +2512,16 @@ def main():
         extra += " --force-role-keep (multipoint)"
     if args.no_disconnect_13:
         extra += " --no-disconnect-13 (multipoint)"
+    if args.no_pairing_kick:
+        extra += " --no-pairing-kick (multipoint)"
+    if args.no_cleanup_kick:
+        extra += " --no-cleanup-kick (multipoint)"
+    if args.no_l2cap_teardown:
+        extra += " --no-l2cap-teardown (multipoint)"
+    if args.no_spp_close:
+        extra += " --no-spp-close (multipoint)"
+    if args.no_l2cap_disconnect:
+        extra += " --no-l2cap-disconnect (multipoint)"
     print("configuration: --bluetooth-mode %d --PTT=%s --PTT2=%s --OD-PTT=%s%s\n"
           % (args.bluetooth_mode, ptt_action, a7, a8, extra))
 
@@ -2069,6 +2552,16 @@ def main():
         wanted += ["rolekeep"]
     if args.no_disconnect_13:
         wanted += ["disc13"]
+    if args.no_pairing_kick:
+        wanted += ["pairkickall", "pairkickone"]
+    if args.no_cleanup_kick:
+        wanted += ["cleanupkickvar", "cleanupkickorphan", "cleanupkickprof"]
+    if args.no_l2cap_teardown:
+        wanted += ["l2capteardownui", "l2capteardownmode"]
+    if args.no_spp_close:
+        wanted += ["sppclose"]
+    if args.no_l2cap_disconnect:
+        wanted += ["l2capdiscbranch", "l2capdiscentry"]
     wanted = list(dict.fromkeys(wanted))
     if ({"pfbody7", "pfbody8", "pfrelease", "pflabels"} & set(wanted)
             and PF_LITERAL_PATCHES & set(wanted)):

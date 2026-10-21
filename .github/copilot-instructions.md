@@ -23,12 +23,17 @@ patch makes any BT headset's mic the PTT transmit source, hardware-confirmed.
 
 | Path | Contents |
 |---|---|
-| `findings/Findings.md` | **Index** of 23 numbered chapters; old §9A.x/§12A.x section numbers preserved inside chapters |
+| `findings/Findings.md` | **Index** of 30 numbered chapters; old §9A.x/§12A.x section numbers preserved inside chapters |
 | `findings/08–13-*.md` | The Bluetooth effort (§9A.1–9A.50) |
 | `findings/22-bluetooth-7-multipoint-architecture.md` | §9B: dual-device/multipoint analysis |
 | `findings/23-bluetooth-8-bt-ptt2.md` | §9C: BT-PTT2 (BT mic on VFO B) — trampoline + code cave design, **hardware-confirmed 2026-09-30** |
 | `findings/24-jieli-ecosystem-sdk-toolchain.md` | §24: SDK/toolchain/packager ecosystem — ufw table, SFCENC registers, stack 1拖2 multipoint, official-objdump validation, flash map |
 | `findings/25-ghidra-decompile-compile-route.md` | §25: Ghidra 12 + ghidra-jieli decompile ⇒ compile route — headless import recipe, pointer-scan seeding, round-trip fixed-point proof, JieLi clang `-target pi32v2 -mcpu=r3 -Oz` |
+| `findings/26-bluetooth-9-eviction-decision.md` | §26: the eviction decision located — app kick `0x01E5B22A` → controller-queue relay `0x01E22890`; multipoint options analysis |
+| `findings/27-firmware-2slot-stack-controller-wall.md` | §27: 2-slot stack course-correction + the E1–E11 experiment log; **§27.19: NOP route exhausted, rollback to E7 prepared** |
+| `findings/28-sdk-forks-survey.md` | §28: `fw-AC63_BT_SDK` fork survey for the SDK-rebuild route (12 forks, tree/API data); **§28.7: full git-history deep-dive — commit-level proof no fork touches the BT libs, Linux-build gotcha catalog, native-Linux `isd_download`, entry-point question answered** |
+| `findings/29-static-analysis-reference-map.md` | §29: consolidated reference map — every SDK btstack/controller function VA, RAM structure, all patch sites (stock→patched + verdict) and wire-protocol facts from the E1–E11 hunt |
+| `findings/30-two-device-plan.md` | §30: **PLAN OF RECORD** — goal = one SPP command device (TID-PTT) + one HFP audio device (Jabra) connected simultaneously, either order (two-SPP never intended); full-image clean-baseline reflash protocol, per-experiment recording discipline, M1–M4 stage ladder with six detailed cards per stage, fallbacks F1–F4 |
 | `tools/Tools.md` | Reference for every script in `tools/` (§1 patcher, §3 crypto, §4 static analysis, §6 BT rig, §7 test suites) |
 | `tools/isa/pi32v2.md` | The pi32v2 instruction-set notes; `pi32dis.py` parses it at runtime |
 | `BIN/ FW/ Dumps/ work/` | User artifacts (firmware, dumps, scratch) — see `ARTIFACTS.md` |
@@ -93,6 +98,11 @@ python tools/patch_h3plus_firmware_bluetooth.py <src> [<dst>] [--show]
     [--force-page-scan] # NOP page-scan disable branch @0x01E18B0E (nop;nop) — radio stays connectable while connected; Option A2 (ch.26 §26.9)
     [--force-role-keep] # ACL accept role -> 0xAA keep-role (goto 0x01E1A4C8) instead of stock 1 become-master; experiment E4 (ch.27 §27.8)
     [--no-disconnect-13] # NOP app disconnect executor @0x01E178CE (call 0x01E07B08); E6 — E3 proved the incumbent-kill on radio-initiated joins is app-level (ch.27 §27.10)
+    [--no-pairing-kick] # NOP reason-0x16 pairing kick @0x01E21DE4 (disconnect-ALL loop) + @0x01E21EC4 (single) via thunk 0x01E19492; E7 field-FAILED 2026-10-09 for accessory incumbent (ch.27 §27.12/§27.13)
+    [--no-cleanup-kick] # NOP the three remaining 0x13-capable wrapper callers @0x01E19AD0/0x01E19B14/0x01E20AB2; E8 HW 2026-10-19 PARTIAL SUCCESS — HCI-level eviction fully dead (ch.27 §27.14/§27.15)
+    [--no-l2cap-teardown] # NOP the two user_send_cmd_prepare(0x4a) L2CAP-teardown posts @0x01E61E22 (Paired->Connect UI) / 0x01E60188 (mode setter); E9 field-FAILED 2026-10-20 (close persisted) (ch.27 §27.15/§27.16)
+    [--no-spp-close]     # no-op spp_channel_disconnect() entry @0x01E173EC (mov r0,#0; rts) — E10 field-FAILED 2026-10-20 (all-channel walk bypasses it) (ch.27 §27.16/§27.17)
+    [--no-l2cap-disconnect] # NOP je r11,#0x4a dispatch branch @0x01E17974 + entry-no-op l2cap_disconnect() @0x01E173D0 (mov r0,#0; rts); E11 HW 2026-10-20 EVICTOR DEAD — new walls = pairing lockup + single-SPP-session (ch.27 §27.17/§27.18)
     [--sectors=PREFIX] [--only SITE]
 ```
 
@@ -106,6 +116,10 @@ python tools/patch_h3plus_firmware_bluetooth.py <src> [<dst>] [--show]
   SystemExit messages go to stderr — check both streams.
 
 ## Static-analysis workflow (decrypted app)
+
+- **Before re-deriving anything:** check [findings/29](../findings/29-static-analysis-reference-map.md)
+  first — it is the single lookup table of every SDK function VA, RAM structure and patch
+  site already located (btstack/controller/app layers + wire facts).
 
 - `work/full.lst` (user-generated, 19.5 MB) is the v1.0.50 disassembly; format:
   `01E00000  3e 58  [005000]  mnemonic`. Regenerate with `tools/pi32dis.py`.
@@ -176,7 +190,7 @@ scripts here, and none should be added.
   Flashing is the user's action; print the exact `jl-uboot-tool` commands instead
   (`--sectors` route preferred; always `read` back and compare after `write`).
 
-## Current state & open frontiers (as of 2026-10-08)
+## Current state & open frontiers (as of 2026-10-21)
 
 Done: both ciphers broken · classifier decoded · routing modes 1–6 mapped · key-remap
 patches HW-confirmed (BT-mic PTT, duplex) · patch tool + 2 test suites green ·
@@ -290,10 +304,95 @@ Open (in priority order):
    as third device (pools are 2-slot — cap expected); confirm HFP audio to
    the headset; root-cause the malformed notifications; E5 (SCO scheduling)
    stays secondary.
-   Remaining routes if the
-   controller is hard-limited: vendor multipoint controller lib, SDK rebuild
-   (ch. 25 decompile⇒compile route), or single-device workaround (one device
-   carrying SPP+HFP, e.g. custom ESP32 combo device — profile coexistence proven).
+   **E6 FIELD OBSERVATIONS + E7 SHIPPED 2026-10-09 (ch. 27 §27.12):** user
+   reports (a) mic audio on the headset speakers during BT-PTT TX = the SCO
+   downlink is live in the 2-link state (first HFP-audio evidence in
+   multipoint), (b) pairing mode / Connect-on-new-device **still kicks** the
+   incumbent — a THIRD executor: reason-`0x16` disconnect-ALL in stack
+   dispatcher `0x01E21AF8` (sites `0x01E21DE4` loop + `0x01E21EC4` single,
+   both via thunk `0x01E19492` → wrapper `0x01E07B08`; E6 only NOP'd the
+   `0x13` one), and (c) power-cycle reconnects the last device = expected
+   single-device reconnect flow (struct `0x102F0`). Shipped
+   `--no-pairing-kick` (8-byte NOP, both sites; suites green); E7 image
+   `work/e7_twodev.bin` = E6 + NOPs — one sector write @flash `0x026000`,
+   pairings survive. **E7 FIELD TEST 2026-10-09: FAILED for the accessory-incumbent
+   case (ch. 27 §27.13)** — with the TID-PTT button as incumbent, Paired→Jabra→Connect
+   still kicks it instantly, while the same flow with a **PC** incumbent stays clean
+   (E6): the surviving kick is **device-class-dependent** through an executor NOT yet
+   located (all known `0x13`/`0x16`/kick sites NOP'd or action-gated; `0x01E20AB2` and
+   the `FUN_01e1792e` jumptable probes negative). `0x026000` flash readback pending.
+   Also confirmed from the field: **SCO stays open after BT-PTT release** (radio-mic
+   sidetone to the headset; press → headset mic = BT-PTT working) = first end-to-end
+   HFP-audio-in-multipoint evidence; **Pairable is gated while connected**; **Delete
+   leaves the link up** (our NOPs) and wedges pairing until power-cycle. Multipoint
+   stands as **confirmed with a PC-class incumbent only**. **NEXT:** readback, then
+   V2a (PC incumbent + Jabra Connect regression) and V2b (PC incumbent + TID-PTT
+   Connect under `btmon -w`) to pin the kick's reason code; a third ACL stays
+   impossible (2-slot pools).
+   **V2b RUN + E8 SHIPPED 2026-10-19 (ch. 27 §27.14):** readback **clean**; V2b evicted the
+   **PC** (graceful L2CAP + HCI `0x13`) when the accessory was the connect target → shipped
+   `--no-cleanup-kick` (NOPs the three remaining 0x13-capable wrapper callers
+   `0x01E19AD0`/`0x01E19B14`/`0x01E20AB2`; E8 image = two sectors `0x01E000`+`0x025000`).
+   **E8 HW-TESTED 2026-10-19: PARTIAL SUCCESS (ch. 27 §27.15)** — behavior changed exactly as
+   designed: the radio sent **no HCI Disconnect at all** (PC bluetoothd dropped the ACL
+   locally, 0x16/MGMT 0x02, after the radio closed only the RFCOMM channel: L2CAP
+   Disconnection Request ident 17 DCID 64 SCID 67). HCI-level eviction fully dead. Closer =
+   app **L2CAP channel-close** `user_send_cmd_prepare(0x4a)` = `l2cap_disconnect_all_channel()`
+   (`l2cap_run` state `0xd` sends the L2CAP Disconnect Request), posted **unconditionally** by
+   the Paired→Connect UI `0x01E61E22` + routing-mode setter `0x01E60188`; **no class check
+   exists** — the class-dependence was a flow artifact (fresh-pairing posts no `0x4a`; PC
+   keeps the ACL on a channel-only close; SPP-only accessories drop their ACL instantly).
+   **E9 SHIPPED as `--no-l2cap-teardown`** (NOPs both posters; 8 bytes; two sectors
+   `0x065000`+`0x066000`; pairings survive; suites green, all twelve sites verified).
+   **NEXT: E9 HW test** T1 = repeat V2b under btmon (expect NO L2CAP Disconnection Request,
+   PC alive; watch whether the TID-PTT SPP binds — single-SPP-session `0x1A740` = candidate
+   next wall) + T2 (E7 scenario); E10 fallback = je-NOP dispatcher branch `0x01E17974`.
+   **E9 HW-TESTED 2026-10-20: FAILED (ch. 27 §27.16)** — with both `0x4a` posters NOP'd
+   (readback-verified) the radio still sent the L2CAP Disconnection Request identically
+   (ident 20, DCID 64, SCID 69; closing channel SPP-confirmed). **Closer root-caused:**
+   `spp_channel_disconnect()` `0x01E173EC` (SPP control block `0x1A740`, live CID `[cb+2]`
+   → `l2cap_disconnect` `0x01E173D0` → state `0xd` → `l2cap_run`) — reached press-time via
+   the `spp_connect` **single-SPP-session chokepoint** (`0x01E1750c`, busy-path `0x01E1751E`:
+   close incumbent, return −2, retry) + the `0xB` DISCONN_SDP_MASTER path
+   (`0x01E20BD2`/`0x01E20E92` → `FUN_01e21af8` case `0xB` → `0x01E1786C`). The dependence is
+   on target **profile**, not class (SPP targets close the incumbent's SPP channel; HFP never
+   touches it — E6); `0x4a` was a co-actor. **E10 SHIPPED as `--no-spp-close`** (entry no-op
+   `mov r0,#0; rts` @`0x01E173EE`; 4 bytes; **ONE sector `0x01C000`**; pairings survive;
+   suites green, all thirteen sites verified). **NEXT: E10 HW test** T1 = repeat V2b under
+   btmon (expect NO L2CAP Disconnection Request, PC alive; TID-PTT SPP bind = candidate next
+   wall, single-SPP-session `0x1A740`); E11 fallback = NOP the 4 SPP-SM `FUN_01e173d0` calls
+   (`0x01E235B8`/`0x01E2376A`/`0x01E23A50`/`0x01E23BF4`) or the `l2cap_disconnect` entry.
+   **E10 HW-TESTED 2026-10-20: FAILED (ch. 27 §27.17)** — with `spp_channel_disconnect` NOP'd
+   (readback-verified) the radio still closed the PC link with **TWO** L2CAP Disconnection
+   Requests (idents 6/7, CIDs 65/64) = the `l2cap_disconnect_all_channel` walk bypassing the
+   SPP primitive; E9 had only NOP'd the two `0x4a` posters, not the dispatcher branch
+   `0x01E17974` nor the four direct `l2cap_disconnect` callers. (TID-PTT did pair+join but its
+   key-presses never arrived = the single-SPP-session wall `0x1A740` already visible.)
+   **E11 SHIPPED as `--no-l2cap-disconnect`** (NOP je-branch `0x01E17974` + entry-no-op
+   `l2cap_disconnect()` `0x01E173D0` `mov r0,#0; rts`; 8 bytes; **ONE sector `0x01C000`**;
+   pairings survive; suites green, all fifteen sites verified). **NEXT: E11 HW test** T1 =
+   repeat V2b under btmon (expect NO L2CAP Disconnection Request at all, PC alive; TID-PTT
+   SPP bind = candidate next wall); E12 fallback = gate the `l2cap_run` state-`0xd` send.
+   **E11 HW-TESTED 2026-10-20: THE EVICTOR IS DEAD (ch. 27 §27.18)** — full-capture btmon
+   shows **zero** radio-originated L2CAP Disconnection Requests and zero HCI Disconnects;
+   the PC held its SPP session through an accessory pairing attempt for the first time (only
+   teardown = power-cycle 0x08 timeout). Two NEW architectural walls: (1) pairing an SPP
+   accessory while the PC holds SPP now **locks the radio up** (the app's connect flow waits
+   on the blocked channel-close completion); (2) with two SPP devices connected, PC frames
+   come back **echoed verbatim, no keying**, and the button's events don't key either —
+   single SPP session `0x1A740` (last-connection-wins) vs current-device command routing
+   (struct `0x102F0`). NOPs cannot fix this layer; **E12 deprioritized**. Remaining routes
+   for two-SPP: code-cave SPP multi-session rewrite (ch. 23 cave + ch. 25 compile route),
+   SDK rebuild, or the ESP32 combo-device workaround. **E11 FOLLOW-UPS 2026-10-20 late
+   (ch. 27 §27.19): the Connect-press deadlock is GENERIC** (HFP/Jabra target deadlocks
+   the app task too whenever a live SPP session exists — stack task alive, app wedged);
+   sequential pairing avoids the lockup **but E11 corrupts normal operation from the
+   first connect** (doubled `+SPP` echo, zero `AT+MPTT`, button keys nothing; reboot +
+   re-pair no help). **Verdict: blocking closes → deadlock, allowing closes → eviction —
+   NOP route EXHAUSTED, E12 deprioritized. Rollback to E7 prepared** (`work/e7rb_*.bin`;
+   E11→E7 = 32 B across five sectors `0x01C000`/`0x01E000`/`0x025000`/`0x065000`/`0x066000`).
+   Two-SPP = **rewrite** routes only: code-cave SPP multi-session (ch. 23/25), SDK rebuild
+   (fork survey done, ch. 28), ESP32 combo device.
 3. ~~Ghidra + quarkslab/ghidra-jieli on Linux~~ ✅ **HARDWARE-VALIDATED 2026-10-03**
    (ch. 25): Ghidra 12.1.4 + ghidra-jieli (unmodified) decompiles
    `work/app_dec.bin` at `0x01E00000` headless (`tools/ghidra/` import recipe +

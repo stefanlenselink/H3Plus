@@ -280,6 +280,14 @@ This requires the radio to hold **two simultaneous Bluetooth links** (multipoint
 
 Investigate the connection-count limit before attempting this.
 
+> **Resolved 2026-10-21 (look ahead):** answered across [ch. 22](22-bluetooth-7-multipoint-architecture.md),
+> [ch. 26](26-bluetooth-9-eviction-decision.md) and [ch. 27](27-firmware-2slot-stack-controller-wall.md):
+> the cap is **not** `max_connections` — the host stack holds 2 `conn_info` slots, the
+> controller table is 4-deep. The limits are (1) the app's single-device struct `0x102F0`
+> + eviction kick, (2) the prebuilt controller refusing **incoming** second pages, and
+> (3) a single SPP session (`0x1A740`). Radio-initiated two-link multipoint was
+> hardware-confirmed on the E6 build (§27.11); the full address map is [ch. 29](29-static-analysis-reference-map.md).
+
 ### 9A.8 VM differential test — NEGATIVE (and that is informative)
 
 Two 4 KiB reads of the plaintext VM area were taken with different accessories paired:

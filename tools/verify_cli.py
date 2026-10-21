@@ -100,6 +100,40 @@ CASES = [
     ("disc13_e6",       ["--no-kick", "--conn-num=2", "--force-page-scan",
                          "--force-role-keep", "--no-disconnect-13"], 0),
     ("d13_alias",       ["--NO-DISCONNECT-13"], 0),
+    # multipoint experiment E7: app 0x16 pairing-kick NOP, alone and full recipe
+    ("pairkick",        ["--no-pairing-kick"], 0),
+    ("pairkick_e7",     ["--no-kick", "--conn-num=2", "--force-page-scan",
+                         "--force-role-keep", "--no-disconnect-13",
+                         "--no-pairing-kick"], 0),
+    ("pk_alias",        ["--NO-PAIRING-KICK"], 0),
+    # multipoint experiment E8: app 0x13 cleanup-kick NOPs, alone and full recipe
+    ("cleanupkick",     ["--no-cleanup-kick"], 0),
+    ("cleanupkick_e8",  ["--no-kick", "--conn-num=2", "--force-page-scan",
+                         "--force-role-keep", "--no-disconnect-13",
+                         "--no-pairing-kick", "--no-cleanup-kick"], 0),
+    ("ck_alias",        ["--NO-CLEANUP-KICK"], 0),
+    # multipoint experiment E9: app L2CAP-teardown NOPs, alone and full recipe
+    ("l2capteardown",   ["--no-l2cap-teardown"], 0),
+    ("l2capteardown_e9", ["--no-kick", "--conn-num=2", "--force-page-scan",
+                          "--force-role-keep", "--no-disconnect-13",
+                          "--no-pairing-kick", "--no-cleanup-kick",
+                          "--no-l2cap-teardown"], 0),
+    ("ltd_alias",       ["--NO-L2CAP-TEARDOWN"], 0),
+    # multipoint experiment E10: app spp_channel_disconnect() no-op, alone and full recipe
+    ("sppclose",        ["--no-spp-close"], 0),
+    ("sppclose_e10",    ["--no-kick", "--conn-num=2", "--force-page-scan",
+                         "--force-role-keep", "--no-disconnect-13",
+                         "--no-pairing-kick", "--no-cleanup-kick",
+                         "--no-l2cap-teardown", "--no-spp-close"], 0),
+    ("sc_alias",        ["--NO-SPP-CLOSE"], 0),
+    # multipoint experiment E11: app L2CAP-level kill, alone and full recipe
+    ("l2capdisc",       ["--no-l2cap-disconnect"], 0),
+    ("l2capdisc_e11",   ["--no-kick", "--conn-num=2", "--force-page-scan",
+                         "--force-role-keep", "--no-disconnect-13",
+                         "--no-pairing-kick", "--no-cleanup-kick",
+                         "--no-l2cap-teardown", "--no-spp-close",
+                         "--no-l2cap-disconnect"], 0),
+    ("ld_alias",        ["--NO-L2CAP-DISCONNECT"], 0),
 ]
 
 RE_BYTES = re.compile(r"plaintext bytes changed: (\d+)")
@@ -185,6 +219,26 @@ def main():
     identical(os.path.join(OUTDIR, "d13_alias.bin"),
               os.path.join(OUTDIR, "disc13.bin"),
               "--NO-DISCONNECT-13", "--no-disconnect-13")
+    # --NO-PAIRING-KICK must equal the canonical --no-pairing-kick build
+    identical(os.path.join(OUTDIR, "pk_alias.bin"),
+              os.path.join(OUTDIR, "pairkick.bin"),
+              "--NO-PAIRING-KICK", "--no-pairing-kick")
+    # --NO-CLEANUP-KICK must equal the canonical --no-cleanup-kick build
+    identical(os.path.join(OUTDIR, "ck_alias.bin"),
+              os.path.join(OUTDIR, "cleanupkick.bin"),
+              "--NO-CLEANUP-KICK", "--no-cleanup-kick")
+    # --NO-L2CAP-TEARDOWN must equal the canonical --no-l2cap-teardown build
+    identical(os.path.join(OUTDIR, "ltd_alias.bin"),
+              os.path.join(OUTDIR, "l2capteardown.bin"),
+              "--NO-L2CAP-TEARDOWN", "--no-l2cap-teardown")
+    # --NO-SPP-CLOSE must equal the canonical --no-spp-close build
+    identical(os.path.join(OUTDIR, "sc_alias.bin"),
+              os.path.join(OUTDIR, "sppclose.bin"),
+              "--NO-SPP-CLOSE", "--no-spp-close")
+    # --NO-L2CAP-DISCONNECT must equal the canonical --no-l2cap-disconnect build
+    identical(os.path.join(OUTDIR, "ld_alias.bin"),
+              os.path.join(OUTDIR, "l2capdisc.bin"),
+              "--NO-L2CAP-DISCONNECT", "--no-l2cap-disconnect")
     # --show must run clean on a kick-NOP'd image
     exitcode, out = run([os.path.join(OUTDIR, "nokick.bin"), "--show",
                          "--no-kick"])
@@ -208,6 +262,46 @@ def main():
         print("--show on disc13 clean OK")
     else:
         print("--show on disc13 -> FAIL")
+        fail += 1
+    # --show must run clean on a pairkick image
+    exitcode, out = run([os.path.join(OUTDIR, "pairkick.bin"), "--show",
+                         "--no-pairing-kick"])
+    if exitcode == 0 and "UNKNOWN" not in out.upper():
+        print("--show on pairkick clean OK")
+    else:
+        print("--show on pairkick -> FAIL")
+        fail += 1
+    # --show must run clean on a cleanupkick image
+    exitcode, out = run([os.path.join(OUTDIR, "cleanupkick.bin"), "--show",
+                         "--no-cleanup-kick"])
+    if exitcode == 0 and "UNKNOWN" not in out.upper():
+        print("--show on cleanupkick clean OK")
+    else:
+        print("--show on cleanupkick -> FAIL")
+        fail += 1
+    # --show must run clean on an l2capteardown image
+    exitcode, out = run([os.path.join(OUTDIR, "l2capteardown.bin"), "--show",
+                         "--no-l2cap-teardown"])
+    if exitcode == 0 and "UNKNOWN" not in out.upper():
+        print("--show on l2capteardown clean OK")
+    else:
+        print("--show on l2capteardown -> FAIL")
+        fail += 1
+    # --show must run clean on a sppclose image
+    exitcode, out = run([os.path.join(OUTDIR, "sppclose.bin"), "--show",
+                         "--no-spp-close"])
+    if exitcode == 0 and "UNKNOWN" not in out.upper():
+        print("--show on sppclose clean OK")
+    else:
+        print("--show on sppclose -> FAIL")
+        fail += 1
+    # --show must run clean on a l2capdisc image
+    exitcode, out = run([os.path.join(OUTDIR, "l2capdisc.bin"), "--show",
+                         "--no-l2cap-disconnect"])
+    if exitcode == 0 and "UNKNOWN" not in out.upper():
+        print("--show on l2capdisc clean OK")
+    else:
+        print("--show on l2capdisc -> FAIL")
         fail += 1
     # --show must run clean on a patched image
     exitcode, out = run([os.path.join(OUTDIR, "c6_odptt_btptt.bin"), "--show",
