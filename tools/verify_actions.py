@@ -570,25 +570,31 @@ if cp.returncode == 0:
        "connect-UI 0x4a post -> nop;nop, connect flow continues")
     ck(g(a, P.L2CAPTEARDOWN_MODE_VA, 8) == bytes.fromhex("00000000048dbdea"),
        "mode-setter 0x4a post -> nop;nop, mode switch continues")
+    ck(g(a, P.L2CAPTEARDOWN_APP_VA, 4) == bytes.fromhex("00000000"),
+       "app (AT/SPP-dispatcher) 0x4a post -> nop;nop (F3-B third poster)")
     d = [i for i in range(len(stock)) if stock[i] != a[i]]
     o1 = P.va_to_off(P.L2CAPTEARDOWN_UI_VA)
     o2 = P.va_to_off(P.L2CAPTEARDOWN_MODE_VA)
-    ck(len(d) == 8 and all(o1 <= i < o1 + 4 or o2 <= i < o2 + 4 for i in d),
-       "l2capteardown patch touches exactly 8 bytes (%s)" % [hex(x) for x in d])
+    o3 = P.va_to_off(P.L2CAPTEARDOWN_APP_VA)
+    ck(len(d) == 12 and all(o1 <= i < o1 + 4 or o2 <= i < o2 + 4 or o3 <= i < o3 + 4
+                            for i in d),
+       "l2capteardown patch touches exactly 12 bytes (%s)" % [hex(x) for x in d])
     cp = run(ltd, "--show", "--no-l2cap-teardown")
     ltdlines = [l for l in cp.stdout.splitlines() if l.startswith("l2capteardown")]
     ck(cp.returncode == 0 and "UNKNOWN" not in cp.stdout
-       and len(ltdlines) == 2 and all("TARGET" in l for l in ltdlines),
+       and len(ltdlines) == 3 and all("TARGET" in l for l in ltdlines),
        "--show on patched l2capteardown clean")
     cp2 = run(ltd, ltd + ".2", "--only", "l2capteardownui",
               "--only", "l2capteardownmode", "--no-l2cap-teardown")
     ck(cp2.returncode == 0 and "Nothing to do" in cp2.stdout,
        "l2capteardown idempotent")
     cp3 = run(ltd, os.path.join(OUTDIR, "v_ltdback.bin"),
-              "--only", "l2capteardownui", "--only", "l2capteardownmode")
+              "--only", "l2capteardownui", "--only", "l2capteardownmode",
+              "--only", "l2capteardownapp")
     b3 = dec(os.path.join(OUTDIR, "v_ltdback.bin")) if cp3.returncode == 0 else b""
     ck(cp3.returncode == 0 and b3[o1:o1 + 4] == bytes.fromhex("bdea84ad")
-       and b3[o2:o2 + 4] == bytes.fromhex("bdead1bb"),
+       and b3[o2:o2 + 4] == bytes.fromhex("bdead1bb")
+       and b3[o3:o3 + 4] == bytes.fromhex("beea9340"),
        "l2capteardown reverts to stock")
 # E9 combo: full multipoint recipe + L2CAP-teardown NOPs
 ce9 = os.path.join(OUTDIR, "v_e9.bin")
@@ -718,6 +724,144 @@ if cp.returncode == 0:
        and g(a, P.L2CAPDISC_BRANCH_VA, 4) == b"\x00\x00\x00\x00"
        and g(a, P.L2CAPDISC_ENTRY_VA, 4) == bytes.fromhex("00238000"),
        "E11 combo carries all fifteen multipoint patches")
+
+# --- --gate-close (ch.30 F3 conditional close gate, findings/30 SS30.11) ----
+gc = os.path.join(OUTDIR, "v_gateclose.bin")
+cp = run(SRC, gc, "--only", "gatespptramp", "--only", "gatel2captramp",
+         "--only", "gatecave", "--gate-close")
+ck(cp.returncode == 0, "--gate-close build")
+if cp.returncode == 0:
+    a = dec(gc)
+    ck(g(a, P.GATE_SPP_TRAMP_VA, 4) == P.GATE_SPP_TRAMP
+       and g(a, P.GATE_L2CAP_TRAMP_VA, 4) == P.GATE_L2CAP_TRAMP
+       and g(a, P.GATE_CAVE2_VA, P.GATE_CAVE2_LEN) == P.GATE_CAVE2_IMG,
+       "gate trampolines + cave stubs written")
+    d = [i for i in range(len(stock)) if stock[i] != a[i]]
+    o1 = P.va_to_off(P.GATE_SPP_TRAMP_VA)
+    o2 = P.va_to_off(P.GATE_L2CAP_TRAMP_VA)
+    o3 = P.va_to_off(P.GATE_CAVE2_VA)
+    ck(len(d) == 56 and all(o1 <= i < o1 + 4 or o2 <= i < o2 + 4
+                            or o3 <= i < o3 + P.GATE_CAVE2_LEN for i in d),
+       "gate-close patch touches exactly 56 bytes (%d)" % len(d))
+    cp = run(gc, "--show", "--gate-close")
+    gclines = [l for l in cp.stdout.splitlines() if l.startswith("gate")]
+    ck(cp.returncode == 0 and "UNKNOWN" not in cp.stdout
+       and len(gclines) == 3 and all("TARGET" in l for l in gclines),
+       "--show on gated image clean")
+    cp2 = run(gc, gc + ".2", "--only", "gatespptramp", "--only",
+              "gatel2captramp", "--only", "gatecave", "--gate-close")
+    ck(cp2.returncode == 0 and "Nothing to do" in cp2.stdout,
+       "gate-close idempotent")
+    cp3 = run(gc, os.path.join(OUTDIR, "v_gcback.bin"),
+              "--only", "gatespptramp", "--only", "gatel2captramp",
+              "--only", "gatecave")
+    b3 = dec(os.path.join(OUTDIR, "v_gcback.bin")) if cp3.returncode == 0 else b""
+    ck(cp3.returncode == 0 and b3[o1:o1 + 4] == bytes.fromhex("1004c0ff")
+       and b3[o2:o2 + 4] == bytes.fromhex("1004bfea")
+       and b3[o3:o3 + P.GATE_CAVE2_LEN] == b"\x00" * P.GATE_CAVE2_LEN,
+       "gate-close reverts to stock")
+    cp4 = run(SRC, os.path.join(OUTDIR, "v_gcbad.bin"), "--gate-close",
+              "--no-spp-close")
+    ck(cp4.returncode != 0, "--gate-close refuses --no-spp-close")
+    cp5 = run(SRC, os.path.join(OUTDIR, "v_gcbad.bin"), "--gate-close",
+              "--no-l2cap-disconnect")
+    ck(cp5.returncode != 0, "--gate-close refuses --no-l2cap-disconnect")
+    # sibling no-op states on an E10/E11 image must stay classified, not UNKNOWN
+    cp = run(spc, "--show", "--gate-close")
+    ck(cp.returncode == 0 and "UNKNOWN" not in cp.stdout,
+       "--show on E10 image with gate flag clean")
+    cp = run(ld, "--show", "--gate-close")
+    ck(cp.returncode == 0 and "UNKNOWN" not in cp.stdout,
+       "--show on E11 image with gate flag clean")
+# F3 combo: full M3 recipe + conditional gate (the field-test image)
+cf3 = os.path.join(OUTDIR, "v_f3.bin")
+cp = run(SRC, cf3, "--no-kick", "--conn-num=2", "--force-page-scan",
+         "--force-role-keep", "--no-disconnect-13", "--no-pairing-kick",
+         "--no-cleanup-kick", "--no-l2cap-teardown", "--gate-close",
+         "--PTT=BT-PTT", "--PTT2=BT-PTT2", "--OD-PTT=PTT")
+ck(cp.returncode == 0, "F3 combo build (M3 recipe + --gate-close)")
+if cp.returncode == 0:
+    a = dec(cf3)
+    ck(g(a, P.NOKICK_VA, 4) == b"\x40\x23\x80\x00"
+       and g(a, P.CONN_NUM_VA, 2) == b"\x31\x25"
+       and g(a, P.PAGESCAN_VA, 4) == b"\x00\x00\x00\x00"
+       and g(a, P.ROLEKEEP_VA, 10) == bytes.fromhex("c0ea4502000000000000")
+       and g(a, P.DISC13_VA, 4) == b"\x00\x00\x00\x00"
+       and g(a, P.PAIRKICK_ALL_VA, 4) == b"\x00\x00\x00\x00"
+       and g(a, P.PAIRKICK_ONE_VA, 4) == b"\x00\x00\x00\x00"
+       and g(a, P.CLEANUPKICK_VAR_VA, 4) == b"\x00\x00\x00\x00"
+       and g(a, P.CLEANUPKICK_ORPHAN_VA, 4) == b"\x00\x00\x00\x00"
+       and g(a, P.CLEANUPKICK_PROF_VA, 4) == b"\x00\x00\x00\x00"
+       and g(a, P.L2CAPTEARDOWN_UI_VA, 4) == b"\x00\x00\x00\x00"
+       and g(a, P.L2CAPTEARDOWN_MODE_VA, 4) == b"\x00\x00\x00\x00"
+       and g(a, P.GATE_SPP_TRAMP_VA, 4) == P.GATE_SPP_TRAMP
+       and g(a, P.GATE_L2CAP_TRAMP_VA, 4) == P.GATE_L2CAP_TRAMP
+       and g(a, P.GATE_CAVE2_VA, P.GATE_CAVE2_LEN) == P.GATE_CAVE2_IMG,
+       "F3 combo carries all M3 patches plus the gate trio")
+
+# --- --cmd5-target (ch.30 R1-e, findings/30 SS30.14.11 + ch. 31) ------------
+c5t = os.path.join(OUTDIR, "v_cmd5target.bin")
+cp = run(SRC, c5t, "--only", "presstore", "--only", "presstcave",
+         "--only", "cmd5target", "--only", "cmd5tcave", "--cmd5-target")
+ck(cp.returncode == 0, "--cmd5-target build")
+if cp.returncode == 0:
+    a = dec(c5t)
+    ck(g(a, P.CMD5T_HOOK_VA, 4) == P.CMD5T_HOOK
+       and g(a, P.CMD5T_CAVE_VA, len(P.CMD5T_CAVE_BYTES)) == P.CMD5T_CAVE_BYTES
+       and g(a, P.PRESST_HOOK_VA, 4) == P.PRESST_HOOK
+       and g(a, P.PRESST_CAVE_VA, len(P.PRESST_CAVE_BYTES))
+       == P.PRESST_CAVE_BYTES,
+       "R1-e hooks + caves written")
+    d = [i for i in range(len(stock)) if stock[i] != a[i]]
+    wins = [(P.CMD5T_HOOK_VA, 4), (P.CMD5T_CAVE_VA, len(P.CMD5T_CAVE_BYTES)),
+            (P.PRESST_HOOK_VA, 4), (P.PRESST_CAVE_VA,
+                                    len(P.PRESST_CAVE_BYTES))]
+    offs = [P.va_to_off(v) for v, _ in wins]
+    ck(all(any(o <= i < o + n for o, n in zip(offs, [w for _, w in wins]))
+           for i in d),
+       "R1-e patch touches only its four windows (%d bytes)" % len(d))
+    cp = run(c5t, "--show", "--cmd5-target")
+    ck(cp.returncode == 0 and "UNKNOWN" not in cp.stdout
+       and "MIXED" not in cp.stdout,
+       "--show on R1-e image clean")
+    cp2 = run(c5t, c5t + ".2", "--only", "presstore", "--only", "presstcave",
+              "--only", "cmd5target", "--only", "cmd5tcave", "--cmd5-target")
+    ck(cp2.returncode == 0 and "Nothing to do" in cp2.stdout,
+       "--cmd5-target idempotent")
+    # R1-c image underneath must still be recognised (handle state)
+    c5h_img = os.path.join(OUTDIR, "v_cmd5handle_then_show.bin")
+    cph = run(SRC, c5h_img, "--cmd5-handle")
+    cpv = run(c5h_img, "--show", "--cmd5-handle") if cph.returncode == 0 else cp
+    ck(cph.returncode == 0 and cpv.returncode == 0
+       and "UNKNOWN" not in cpv.stdout,
+       "--cmd5-handle image still recognised")
+
+# R1-e on the full F3-v3 recipe: coexistence + clean --show
+c5tf = os.path.join(OUTDIR, "v_cmd5target_f3.bin")
+cp = run(SRC, c5tf, "--PTT=BT-PTT", "--PTT2=BT-PTT2", "--OD-PTT=PTT",
+         "--no-kick", "--conn-num=2", "--force-page-scan",
+         "--force-role-keep", "--no-disconnect-13", "--no-pairing-kick",
+         "--no-cleanup-kick", "--no-l2cap-teardown", "--gate-close",
+         "--cmd5-target")
+ck(cp.returncode == 0, "R1-e combo build (F3-v3 recipe + --cmd5-target)")
+if cp.returncode == 0:
+    a = dec(c5tf)
+    ck(g(a, P.CMD5T_HOOK_VA, 4) == P.CMD5T_HOOK
+       and g(a, P.CMD5T_CAVE_VA, len(P.CMD5T_CAVE_BYTES)) == P.CMD5T_CAVE_BYTES
+       and g(a, P.PRESST_HOOK_VA, 4) == P.PRESST_HOOK
+       and g(a, P.PRESST_CAVE_VA, len(P.PRESST_CAVE_BYTES))
+       == P.PRESST_CAVE_BYTES
+       and g(a, P.GATE_SPP_TRAMP_VA, 4) == P.GATE_SPP_TRAMP
+       and g(a, 0x01E21EF4, 4) == bytes.fromhex("bfeace35"),
+       "R1-e combo carries its four sites, gate armed, cmd-5 kill stock")
+    cp = run(c5tf, "--show", "--PTT=BT-PTT", "--PTT2=BT-PTT2",
+             "--OD-PTT=PTT", "--no-kick", "--conn-num=2",
+             "--force-page-scan", "--force-role-keep", "--no-disconnect-13",
+             "--no-pairing-kick", "--no-cleanup-kick", "--no-l2cap-teardown",
+             "--gate-close", "--cmd5-target")
+    ck(cp.returncode == 0 and "UNKNOWN" not in cp.stdout
+       and "MIXED" not in cp.stdout,
+       "--show on R1-e combo image clean")
 
 # --- cleanup ----------------------------------------------------------------
 if not fail and not KEEP:

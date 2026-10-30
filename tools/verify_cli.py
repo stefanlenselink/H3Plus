@@ -134,6 +134,29 @@ CASES = [
                          "--no-l2cap-teardown", "--no-spp-close",
                          "--no-l2cap-disconnect"], 0),
     ("ld_alias",        ["--NO-L2CAP-DISCONNECT"], 0),
+    # ch.30 F3: conditional close gate, alone and full M3 recipe
+    ("gateclose",       ["--gate-close"], 0),
+    ("gateclose_f3",    ["--no-kick", "--conn-num=2", "--force-page-scan",
+                         "--force-role-keep", "--no-disconnect-13",
+                         "--no-pairing-kick", "--no-cleanup-kick",
+                         "--no-l2cap-teardown", "--gate-close"], 0),
+    ("gc_alias",        ["--GATE-CLOSE"], 0),
+    # gate trampolines share the entry bytes of the E10/E11 no-ops -> refused
+    ("gc_conf_spp",     ["--gate-close", "--no-spp-close"], 1),
+    ("gc_conf_l2cap",   ["--gate-close", "--no-l2cap-disconnect"], 1),
+    # ch.30 R1-e: targeted cmd-5 kill + press store, alone and full F3-v3 recipe
+    ("cmd5target",      ["--cmd5-target"], 0),
+    ("cmd5target_f3",   ["--PTT=BT-PTT", "--PTT2=BT-PTT2", "--OD-PTT=PTT",
+                         "--no-kick", "--conn-num=2", "--force-page-scan",
+                         "--force-role-keep", "--no-disconnect-13",
+                         "--no-pairing-kick", "--no-cleanup-kick",
+                         "--no-l2cap-teardown", "--gate-close",
+                         "--cmd5-target"], 0),
+    ("ct_alias",        ["--CMD5-TARGET"], 0),
+    ("ct_conf_nok",     ["--cmd5-target", "--no-cmd5-kill"], 1),
+    ("ct_conf_r1a",     ["--cmd5-target", "--r1-conditional-kill"], 1),
+    ("ct_conf_r1b",     ["--cmd5-target", "--r1-walker-kill"], 1),
+    ("ct_conf_r1c",     ["--cmd5-target", "--cmd5-handle"], 1),
 ]
 
 RE_BYTES = re.compile(r"plaintext bytes changed: (\d+)")
@@ -239,6 +262,18 @@ def main():
     identical(os.path.join(OUTDIR, "ld_alias.bin"),
               os.path.join(OUTDIR, "l2capdisc.bin"),
               "--NO-L2CAP-DISCONNECT", "--no-l2cap-disconnect")
+    # --GATE-CLOSE must equal the canonical --gate-close build
+    identical(os.path.join(OUTDIR, "gc_alias.bin"),
+              os.path.join(OUTDIR, "gateclose.bin"),
+              "--GATE-CLOSE", "--gate-close")
+    # --show must run clean on a gated image
+    exitcode, out = run([os.path.join(OUTDIR, "gateclose.bin"), "--show",
+                         "--gate-close"])
+    if exitcode == 0 and "UNKNOWN" not in out.upper():
+        print("--show on gateclose clean OK")
+    else:
+        print("--show on gateclose -> FAIL")
+        fail += 1
     # --show must run clean on a kick-NOP'd image
     exitcode, out = run([os.path.join(OUTDIR, "nokick.bin"), "--show",
                          "--no-kick"])

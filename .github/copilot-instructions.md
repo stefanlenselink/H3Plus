@@ -33,7 +33,8 @@ patch makes any BT headset's mic the PTT transmit source, hardware-confirmed.
 | `findings/27-firmware-2slot-stack-controller-wall.md` | §27: 2-slot stack course-correction + the E1–E11 experiment log; **§27.19: NOP route exhausted, rollback to E7 prepared** |
 | `findings/28-sdk-forks-survey.md` | §28: `fw-AC63_BT_SDK` fork survey for the SDK-rebuild route (12 forks, tree/API data); **§28.7: full git-history deep-dive — commit-level proof no fork touches the BT libs, Linux-build gotcha catalog, native-Linux `isd_download`, entry-point question answered** |
 | `findings/29-static-analysis-reference-map.md` | §29: consolidated reference map — every SDK btstack/controller function VA, RAM structure, all patch sites (stock→patched + verdict) and wire-protocol facts from the E1–E11 hunt |
-| `findings/30-two-device-plan.md` | §30: **PLAN OF RECORD** — goal = one SPP command device (TID-PTT) + one HFP audio device (Jabra) connected simultaneously, either order (two-SPP never intended); full-image clean-baseline reflash protocol, per-experiment recording discipline, M1–M4 stage ladder with six detailed cards per stage, fallbacks F1–F4 |
+| `findings/30-two-device-plan.md` | §30: **PLAN OF RECORD** — goal = one SPP command device (TID-PTT) + one HFP audio device (Jabra) connected simultaneously, either order (two-SPP never intended); full-image clean-baseline reflash protocol, per-experiment recording discipline, M1–M4 stage ladder with six detailed cards per stage, fallbacks F1–F4; **§30.14.11: R1-e design (press-store + targeted cmd-5 kill), `--cmd5-target` pending** |
+| `findings/31-bluetooth-10-connect-press-flow.md` | §31: R2 static analysis of the Connect-press flow (official-objdump-authoritative, 2026-10-28) — wait loops = *transitional*-link checks, freeze re-attributed to the same-address page guard `0x01E16824`; D1 = GO / D2 = NO-GO; corrections register vs §30.14.10 |
 | `tools/Tools.md` | Reference for every script in `tools/` (§1 patcher, §3 crypto, §4 static analysis, §6 BT rig, §7 test suites) |
 | `tools/isa/pi32v2.md` | The pi32v2 instruction-set notes; `pi32dis.py` parses it at runtime |
 | `BIN/ FW/ Dumps/ work/` | User artifacts (firmware, dumps, scratch) — see `ARTIFACTS.md` |
@@ -178,6 +179,12 @@ scripts here, and none should be added.
 
 ## Editing conventions in this workspace
 
+- **Write findings down IMMEDIATELY (user directive, 2026-10-29).** The moment anything
+  is discovered, executed, or created, record it in the findings documents — do not
+  batch documentation to the end of a session. Analysis results → the relevant chapter
+  (new §number as needed); builds/flashes/experiment runs → the ch. 30 ledger + the
+  chapter under test; tool changes → `tools/Tools.md` + `findings/17`. The repo is the
+  durable memory: any interruption must leave it current enough to recover from.
 - **Use `replace_string_in_file` / `multi_replace_string_in_file` for `.md` edits.**
   `insert_edit_into_file` has silently no-opped twice on `Findings.md` in this repo.
 - Keep chapter cross-references as relative links with correct GitHub anchor slugs;
@@ -189,8 +196,13 @@ scripts here, and none should be added.
 - Never run `git push`, flashing commands, or destructive disk operations autonomously.
   Flashing is the user's action; print the exact `jl-uboot-tool` commands instead
   (`--sectors` route preferred; always `read` back and compare after `write`).
+  **Sector-level writes additionally verify the whole starting point:** after writing,
+  `read 0x00000000 0x100000` and byte-compare the strict region `0x0000–0x0C8FDF`
+  (bootloader + app) against the expected image — excluding the 32 device-specific
+  bytes @`0x0C8FE0` and the VM/metadata region @`0x0C9000+` (pairing data legitimately
+  differs). Any mismatch outside those is a STOP (see `findings/30` §30.3).
 
-## Current state & open frontiers (as of 2026-10-21)
+## Current state & open frontiers (as of 2026-10-29)
 
 Done: both ciphers broken · classifier decoded · routing modes 1–6 mapped · key-remap
 patches HW-confirmed (BT-mic PTT, duplex) · patch tool + 2 test suites green ·
@@ -393,6 +405,27 @@ Open (in priority order):
    E11→E7 = 32 B across five sectors `0x01C000`/`0x01E000`/`0x025000`/`0x065000`/`0x066000`).
    Two-SPP = **rewrite** routes only: code-cave SPP multi-session (ch. 23/25), SDK rebuild
    (fork survey done, ch. 28), ESP32 combo device.
+   **Ch. 30 R-series (2026-10-26/29):** F3-v3 = known-best base (full-image sha
+   `1a1eaca1`); R1-a/b/c all field-FAILED with the identical Connect freeze; radio
+   currently on **R1-c** (`ee0ba984`), rollback `work/ch30_r1crb.sh` ready (one sector
+   `0x026000`). **R2 static analysis DONE 2026-10-28 → [Ch. 31](../findings/31-bluetooth-10-connect-press-flow.md):**
+   the freeze is the **same-address page guard** `0x01E16824` (call @`0x01E21E76`), not an
+   any-link wait (the loops read *transitional* controller links); press = settings handler
+   `FUN_01e6ec9e`, cmd-5 post `call 0x01E1792E` @`0x01E6ECDA`; D1 = GO (optional R1-f),
+   D2 = NO-GO. The **R1-e design** (press-store + target-aware cmd-5 kill on F3-v3,
+   expected sectors `0x026000`+`0x073000`+`0x0AC000`) is specified in ch. 30 §30.14.11 —
+   **NEXT CODING STEP: implement `--cmd5-target`** (mutually exclusive in the cmd-5 flag
+   family), run both verify suites, build `work/ch30_r1e.bin`, stage
+   `work/ch30_r1e.sh` + card `work/ch30_r1ec.sh` (T1 repair regression, T2/T3 GOAL orders
+   A/B, T4 fresh pairing, T5 BT off/on). UNTESTED — nothing flashed.
+   **DONE 2026-10-30: `--cmd5-target` implemented** (4 sites — press-store hook
+   `0x01E6ECDA` + cave `0x01EA77D0`, cmd-5-target hook `0x01E21EF0` + cave `0x01EA77A8`;
+   all objdump round-trip verified; suites green incl. new R1-e cases), **image built**
+   `work/ch30_r1e.bin` sha `d2aa7d8d…` (diff vs F3-v3 = exactly sectors
+   `0x026000`+`0x073000`+`0x0AC000`, 73 B — prediction confirmed), **stage
+   `work/ch30_r1e.sh` + card `work/ch30_r1ec.sh` ready — awaiting user flash**
+   (radio still on R1-c; rollback `work/ch30_r1crb.sh`). Still UNTESTED — nothing
+   flashed.
 3. ~~Ghidra + quarkslab/ghidra-jieli on Linux~~ ✅ **HARDWARE-VALIDATED 2026-10-03**
    (ch. 25): Ghidra 12.1.4 + ghidra-jieli (unmodified) decompiles
    `work/app_dec.bin` at `0x01E00000` headless (`tools/ghidra/` import recipe +

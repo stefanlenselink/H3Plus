@@ -1055,6 +1055,65 @@ PAIRKICK_LABELS = {
 }
 
 # --------------------------------------------------------------------------
+# --no-cmd5-kill (EXPERIMENTAL / UNTESTED): disable the PRESS-TIME incumbent
+# kill located 2026-10-25 (ch. 30 SS30.13 Q1). The Paired->Connect UI press
+# posts user_send_cmd_prepare(5) at 0x01E61E18 (LIVE in every E1-E11/F build:
+# E9 only NOP'd the adjacent 0x4A post at 0x01E61E22). BT-task dispatcher
+# FUN_01e21af8 case 5 loops the conn_info slots (0x1A5B8/0x1A5D4) and for
+# each in-use slot with halfword +8 == 0 calls FUN_01e08a94 (sole caller,
+# 0x01E21EF4), which posts controller command 0xCFE (0x01E029DE, sub=3,
+# arg 0x400002, BD_ADDR). The 0xCFE handler (0x01E0DDA4) resolves the conn
+# by address (0x01E14BA8, table 0x1A0A8) and calls the disconnect executor
+# FUN_01e091EA(conn, 0x13) - graceful L2CAP teardown + Disconnect Complete
+# 0x13, the E3 btmon signature. This path touches none of the NOP'd sites
+# (wrapper 0x01E07B08, relay 0x01E22890, 0x4a posters, close primitives),
+# which is why the press kicked at 0 s in F3V3-B r2. Cmd 5 is fire-and-
+# forget (ring-buffer post), so NOP-ing the kill call should not deadlock.
+CMD5KILL_VA = 0x01E21EF4
+CMD5KILL_CTX = bytes.fromhex("bfeace35488d01e1")
+CMD5KILL_STATES = {
+    "stock": bytes.fromhex("bfeace35"),
+    "disabled": bytes.fromhex("00000000"),  # nop; nop -> never kills incumbent
+}
+CMD5KILL_LABELS = {
+    "stock": "call 0x01E08A94 (cmd-5 0xCFE disconnect-by-address kill active)",
+    "disabled": "nop; nop (cmd-5 press-time incumbent kill disabled; UNTESTED)",
+}
+
+# --------------------------------------------------------------------------
+# --cmd5-handle (R1-c, 2026-10-27): fix the cmd-5 stuck-slot test's FIELD.
+# The case-5 loop (ring consumer FUN_01e21af8, BTSTACK task) is
+#   0x01E21ED0: r1 = r0 + 8            ; r1 = slot + 8
+#   ...     r6 = u32 [slot+0xF..0x12]  ; state word
+#   0x01E21EE6: r2 = r6 & 0x20000000   ; inused (bit29)
+#   0x01E21EEE: if (r2 == 0) skip
+#   0x01E21EF0: r1 = h[r1+0]           ; <<< loads MASK at slot+8
+#   0x01E21EF2: if (r1 != 0) skip
+#   0x01E21EF4: call 0x01E08A94        ; kill by address
+# The mask halfword is only ever set by PC-class flows: SPP accessories
+# (TID-PTT) keep mask==0 while LIVE, so cmd 5 kills them at every press -
+# the class-dependent evictor of E7/F3V3-B (ch. 30 SS30.14.8 corollary 3).
+# The correct stuck test is the CONNECTION HANDLE at slot+6 (== 0 iff no
+# ACL; same live test used by ring cases 4 and 0x4a). Re-encoding the load
+# from h[r1+0] to h[r0+6] (pi32v2: 19 60 -> 09 63, verified against
+# 0x01E0349C "0b 63 = r3 = h[r0+6]") keeps cmd 5 live (F4's wait stays
+# satisfied) but it now never touches a live link. Runs on the btstack
+# task - the killer's queue-post task contract (SS30.14.8) is respected.
+CMD5HANDLE_VA = 0x01E21EF0
+CMD5HANDLE_CTX_VA = 0x01E21EEC  # 6-byte window ends exactly before 0x26EF4
+CMD5HANDLE_CTX = bytes.fromhex("1c8702441960")
+CMD5HANDLE_STATES = {
+    "stock": bytes.fromhex("1960"),   # r1 = h[r1+0]  (mask@+8 test)
+    "handle": bytes.fromhex("0963"),  # r1 = h[r0+6]  (handle@+6 test)
+}
+CMD5HANDLE_LABELS = {
+    "stock": "r1 = h[r1+0] (cmd-5 stuck test on mask@slot+8 - kills live "
+             "mask==0 accessories)",
+    "handle": "r1 = h[r0+6] (cmd-5 stuck test on handle@slot+6 - live links "
+              "never killed; R1-c, UNTESTED)",
+}
+
+# --------------------------------------------------------------------------
 # --no-cleanup-kick (EXPERIMENTAL / UNTESTED): disable the THREE remaining
 # 0x13-capable callers of the disconnect wrapper 0x01E07B08 (via thunk
 # 0x01E19492) - the last host-side disconnect executors left after
@@ -1120,8 +1179,10 @@ CLEANUPKICK_LABELS = {
 # 0x01E1792E branch 0x01E17B20 = l2cap_disconnect_all_channel() inlined -
 # walks the channel list, forces each channel to state 0xd and pumps
 # l2cap_run (FUN_01e16f60), which for state 0xd sends the L2CAP Disconnect
-# Request (sig code 6). Pure L2CAP, synchronous at button-press. Only two
-# posters of 0x4a exist (census of all 67 dispatcher call sites):
+# Request (sig code 6). Pure L2CAP, synchronous at button-press. Three
+# posters of 0x4a exist (full census of all 80 dispatcher call sites,
+# 2026-10-24 — the original "two" census missed the third, which F3-B
+# proved is the press-time evictor that survived the other two NOPs):
 #   0x01E61E22 - FUN_01e60e44 "connect selected device" UI handler
 #                (Paired -> MORE -> Connect). UNCONDITIONAL. NOP-ing the
 #                call is fall-through safe (next insn reloads r0); the
@@ -1130,6 +1191,14 @@ CLEANUPKICK_LABELS = {
 #   0x01E60188 - FUN_01e60120 routing-mode setter; posts 0x4a only when the
 #                routing mode CHANGES while a link is active (e.g. BT-PTT
 #                mode switch after a join). NOP-ed too, for the link-up case.
+#   0x01E4F804 - FUN_01e4f652 (AT/SPP command dispatcher family; only xref =
+#                branch-table pointer @0x01E4E274). Posts 0x4a when a helper
+#                @0x01E4F034 returns nonzero, then arms a 1000 ms timer.
+#                F3-B (2026-10-24): with the two sites above NOP-ed, the
+#                Paired->Connect press STILL walked the channels (0 s SPP
+#                kill + app freeze) — this is that missing poster.
+#                NOP-ing is fall-through safe: the call's result is not
+#                consumed (next insn at 0x01E4F808 reloads r1, r0 and r2).
 # SIDE EFFECTS: the app never tears down L2CAP/RFCOMM channels on these
 # flows; stale channels persist until power-cycle (the E6 malformed-AT+MPTT
 # side effect remains). The pre-page settle delay inside the 0x4a body is
@@ -1137,14 +1206,20 @@ CLEANUPKICK_LABELS = {
 # --------------------------------------------------------------------------
 L2CAPTEARDOWN_UI_VA = 0x01E61E22
 L2CAPTEARDOWN_MODE_VA = 0x01E60188
+L2CAPTEARDOWN_APP_VA = 0x01E4F804
 L2CAPTEARDOWN_UI_CTX = bytes.fromhex("bdea84ad506b804b")
 L2CAPTEARDOWN_MODE_CTX = bytes.fromhex("bdead1bb048dbdea")
+L2CAPTEARDOWN_APP_CTX = bytes.fromhex("beea9340c1ff82fa")
 L2CAPTEARDOWN_UI_STATES = {
     "stock": bytes.fromhex("bdea84ad"),
     "disabled": bytes.fromhex("00000000"),  # nop; nop -> no channel close
 }
 L2CAPTEARDOWN_MODE_STATES = {
     "stock": bytes.fromhex("bdead1bb"),
+    "disabled": bytes.fromhex("00000000"),  # nop; nop -> no channel close
+}
+L2CAPTEARDOWN_APP_STATES = {
+    "stock": bytes.fromhex("beea9340"),
     "disabled": bytes.fromhex("00000000"),  # nop; nop -> no channel close
 }
 L2CAPTEARDOWN_LABELS = {
@@ -1194,10 +1269,12 @@ SPPCLOSE_CTX = bytes.fromhex("c0ff40a701000060")
 SPPCLOSE_STATES = {
     "stock": bytes.fromhex("c0ff40a7"),
     "disabled": bytes.fromhex("40200004"),  # mov r0,#0; pop pc -> return 0
+    "f3gate": bytes.fromhex("998140a7"),    # F3 gate trampoline @0x01E173EC spills here
 }
 SPPCLOSE_LABELS = {
     "stock": "spp_channel_disconnect() active",
     "disabled": "mov r0,#0; rts (spp_channel_disconnect disabled; UNTESTED)",
+    "f3gate": "--gate-close trampoline present (mutually exclusive)",
 }
 
 # --------------------------------------------------------------------------
@@ -1246,11 +1323,279 @@ L2CAPDISC_BRANCH_STATES = {
 L2CAPDISC_ENTRY_STATES = {
     "stock": bytes.fromhex("1004bfea"),
     "disabled": bytes.fromhex("00238000"),  # mov r0,#0; rts -> disconnect no-op
+    "f3gate": bytes.fromhex("c4eab581"),    # F3 gate trampoline replaces the entry
 }
 L2CAPDISC_LABELS = {
     "stock": "l2cap disconnect path active",
     "disabled": "nop / mov r0,#0; rts (l2cap disconnect disabled; UNTESTED)",
+    "f3gate": "--gate-close trampoline present (mutually exclusive)",
 }
+
+# --------------------------------------------------------------------------
+# --gate-close (EXPERIMENTAL / UNTESTED, ch.30 F3): CONDITIONAL close gate.
+#
+# E11 (ch.27 SS27.17/27.18) proved the evictor on every press path is the
+# pair of close primitives themselves - entry-NOP-ing both kills eviction
+# completely - but unconditionally: closes blocked OUTSIDE the connect press
+# too, which deadlocked the app (SS27.19 "blocking closes -> deadlock") and
+# corrupted normal operation. E1-E11 never tried gating the closes to the
+# press window only.
+#
+# The press window flag already exists: RAM 0x1A662 bit 7 (page-pending),
+# set by FUN_01E185F0(1) in the "connect selected device" press flow
+# (0x01E61DEA) and cleared only by FUN_01E185F0(0) on the no-connection
+# timeout path (0x01E7F032) or the scan-reset FUN_01E184A2. It is STICKY
+# across a successful connect (level gate, see ch.30 SS30.11) - after the
+# first manual menu-connect, channel closes stay skipped until BT-off /
+# power-cycle; HCI-level disconnects (kick 0x01E074DE, BT toggle
+# FUN_01E6076C) are NOT gated.
+#
+# Patch: 4-byte goto32 at each primitive entry into a stub in the second
+# half of the code cave (CAVE2 = 0x01EA76DE + 68, after the BT-PTT2 code;
+# 296 B free, 54 used). Stub: test 0x1A662 bit 7; set -> r0=0; rts (skip
+# the close; the hw link still holds the caller's return - the stolen
+# `push rets` has not run yet); clear -> replay the stolen instructions
+# (push rets + [mov r0,#0x1A740] / [call 0x01E16938], the call
+# re-encoded for the cave site) and goto back to entry+6. Stack balance
+# verified both ways; stubs use r0/r1 which the bodies clobber anyway
+# (r0 = cid in l2cap_disconnect must survive the test - it does, the test
+# uses r1 there).
+#
+# Covered executors (all funnel through these two entries): Order-B press
+# eviction = 0xB -> FUN_01E1782C(0,1,0) -> spp_connect busy path
+# (0x01E1751E) -> spp_channel_disconnect; Order-A chokepoint close = same;
+# LAB_01e20ef6 direct close = same; the 0x4a walk and the four SPP-SM
+# direct callers -> l2cap_disconnect. Stock behavior is preserved for
+# every close outside a press window (the E11 differentiator).
+# CONFlicts: the trampolines overwrite the same 4 bytes as --no-spp-close
+# (0x01E173EE) / --no-l2cap-disconnect (0x01E173D0) - mutually exclusive.
+# --------------------------------------------------------------------------
+GATE_FLAG_ADDR = 0x0001A662          # halfword; bit 7 = page-pending
+GATE_CAVE2_VA = 0x01EA76DE + 68      # 0x01EA7722, free after the BT-PTT2 cave code
+GATE_SPP_TRAMP_VA = 0x01E173EC       # spp_channel_disconnect() entry
+GATE_L2CAP_TRAMP_VA = 0x01E173D0     # l2cap_disconnect() entry
+GATE_SPP_STUB_VA = GATE_CAVE2_VA
+GATE_L2CAP_STUB_VA = GATE_CAVE2_VA + 28
+
+
+def _gate_stubs():
+    """(spp_stub, l2cap_stub) gate stubs for the second cave half."""
+    def stub(dst, reg, resume, replay):
+        a = bytearray()
+        a += (b"\xc0\xff" if reg == 0 else b"\xc1\xff") + \
+            GATE_FLAG_ADDR.to_bytes(4, "little")        # rN = &flag
+        a += b"\x08\x40" if reg == 0 else b"\x19\x40"   # rN = b[rN+0] (u)
+        a += b"\x80\xa7" if reg == 0 else b"\x99\xa7"   # rN = rN >> 7
+        a += encode_branch2(dst + len(a), dst + 0x10, neq=False, reg=reg)
+        a += b"\x40\x20"                                # r0 = 0
+        a += b"\x80\x00"                                # rts (hw link, nothing pushed)
+        a += b"\x10\x04"                                # [--sp] = rets   (replay)
+        a += replay                                     # stolen instrs (site-relative!)
+        a += encode_goto32(dst + len(a), resume)
+        return bytes(a)
+    spp = stub(GATE_SPP_STUB_VA, 0, 0x01E173F4,
+               b"\xc0\xff" + (0x1A740).to_bytes(4, "little"))   # mov r0,#0x1A740
+    l2 = stub(GATE_L2CAP_STUB_VA, 1, 0x01E173D6,
+              encode_call(GATE_L2CAP_STUB_VA + 0x12, 0x01E16938))  # find channel
+    return spp, l2
+
+
+GATE_SPP_STUB, GATE_L2CAP_STUB = _gate_stubs()
+GATE_CAVE2_IMG = GATE_SPP_STUB + GATE_L2CAP_STUB
+GATE_CAVE2_LEN = len(GATE_CAVE2_IMG)                   # 54
+GATE_SPP_TRAMP = encode_goto32(GATE_SPP_TRAMP_VA, GATE_SPP_STUB_VA)
+GATE_L2CAP_TRAMP = encode_goto32(GATE_L2CAP_TRAMP_VA, GATE_L2CAP_STUB_VA)
+GATE_SPP_CTX = bytes.fromhex("1004c0ff")              # push rets; mov r0,#0x1a740
+GATE_L2CAP_CTX = bytes.fromhex("1004bfea")            # push rets; call find_channel
+
+# --------------------------------------------------------------------------
+# --r1-conditional-kill (EXPERIMENTAL / UNTESTED, ch.30 R1-a): CONDITIONAL
+# cmd-5 incumbent kill.
+#
+# The cmd-5 cleanup loop (FUN_01e21af8 case 5, ch.30 SS30.13 Q1/Q4/Q5/Q6)
+# kills EVERY inused conn slot whose state halfword (+8) is 0:
+# `call FUN_01e08a94(slot)` -> controller 0xCFE disconnect-by-address,
+# reason 0x13.  That is the press-time incumbent killer behind every
+# surviving eviction (M3-A, F3V2-B, F3V3-B r2).  F4 (NOP the call) is a
+# regression: the phantom-repair flow (Paired->Connect on the boot phantom)
+# depends on the kill, and the page path's already-connected address guard
+# (FUN_01e16824) blocks a same-device re-page without it.
+#
+# R1-a makes the kill conditional instead of removing it.  Hook: replace
+# the 4-byte `call` at 0x01E21EF4 with `call` to a 50-byte cave at
+# 0x01EA7758 (free run after BT-PTT2 code + F3 gate stubs; region verified
+# all-zero in v44/v45/v50, pointer-scan clean).  Cave predicate:
+#   kill iff  handle(slot+6) == 0            (stuck slot, walker needs it)
+#      OR     paired-list ptr [0xB468] == 0  (not in Paired UI -> stock)
+#      OR     slot addr == selected addr     (repair flow -> stock)
+#   else skip kill (goal: different device selected, incumbent survives;
+#   the page to the selected target then fires on the E6-proven path).
+# Selected-device source (SS Q6a): [[0xB468] + [0x102D0]*0xC + 8] (the same
+# heap double-deref the settings-Connect handlers FUN_01e6ec9e/FUN_01e66ef8
+# use); 0xB468 is zeroed when the Paired screen exits, so any non-UI cmd-5
+# poster (BT-off, power) takes the stock kill path.
+# Register contract at hook (verified, ch.30 SS30.13): r0 = slot ptr,
+# r4 = slot+15 LIVE, r14/r6/r7 live; cave clobbers only r1/r2/r3 (dead
+# after the call) and uses no stack.  Both exits land at stock 0x01E21EF8
+# (tail-call KILL via goto; SKIP via rts returning to the loop).
+# Mutually exclusive with --no-cmd5-kill (same 4 bytes).
+# --------------------------------------------------------------------------
+R1_KILL_HOOK_VA = 0x01E21EF4
+R1_KILL_CTX = bytes.fromhex("bfeace35")               # stock call FUN_01e08a94
+R1_KILLER_VA = 0x01E08A94
+R1_LIST_PTR_ADDR = 0x0000B468                         # paired-list heap ptr
+R1_LIST_IDX_ADDR = 0x000102D0                         # selection index byte
+R1_CAVE_VA = 0x01EA7758                               # free (434 B run)
+R1_CAVE_BYTES = bytes.fromhex(
+    "09638142"            # r1 = h[r0+6]; if (r1 != 0) goto +4  (handle)
+    "fbea9a09"            # goto 0x01E08A94                     (KILL tail)
+    "42e068b4"            # r2 = 0xB468
+    "2260"                # r2 = [r2+0]                         (list ptr)
+    "725a"                # if (r2 == 0) goto KILL              (list dead)
+    "c3ffd0020100"        # r3 = 0x102D0                        (17-bit mov)
+    "3b40"                # r3 = b[r3+0]                        (index)
+    "e3e10c30"            # r3 = r3 * 0xC                       (mul)
+    "2318"                # r3 += r2
+    "3362"                # r3 = [r3+8]                         (sel addr ptr)
+    "0160"                # r1 = [r0+0]
+    "3260"                # r2 = [r3+0]
+    "2919"                # r1 ^= r2
+    "0a62"                # r2 = h[r0+4]
+    "2919"                # r1 ^= r2
+    "3b62"                # r3 = h[r3+4]
+    "3919"                # r1 ^= r3  (r1 = XOR of all 6 address bytes)
+    "714a"                # if (r1 == 0) goto KILL  (same device)
+    "8000"                # rts                       (skip kill)
+)
+R1_KILL_HOOK = encode_call(R1_KILL_HOOK_VA, R1_CAVE_VA)
+
+# The r1condkill hook lives at CMD5KILL_VA, so teach the cmd5kill state table
+# about it: find_app_start() validates EVERY patch's context, and an image
+# carrying the conditional hook must still be recognised (and labelled).
+CMD5KILL_STATES["conditional"] = R1_KILL_HOOK
+CMD5KILL_LABELS["conditional"] = (
+    "call cave 0x%08X (R1 conditional kill; --r1-conditional-kill)" % R1_CAVE_VA
+)
+
+# --------------------------------------------------------------------------
+# --r1-walker-kill (EXPERIMENTAL / UNTESTED, ch.30 SS30.14.6 R1-b): move the
+# press-time incumbent kill from the cmd-5 loop (field-FROZE as R1-a: the
+# selection cell there is race-stale / unvalidated on the Paired-screen path)
+# to the WALKER page-post site, where the armed target cell 0x10E34 is fresh
+# (CON pump cases 8/0xb write it, then call the walker synchronously).
+# Hook = the `call 0x01E1792E` at 0x01E60DE4 (walker FUN_01e60d34; r0=1, r1=6,
+# r2=0x10E34 live at entry; r4-r11 live -> callee-saved, handled by the
+# compiled prologue).  Cave2 (official JieLi clang -target pi32v2 -mcpu=r3
+# -Oz from C, objdump-verified, /tmp/opencode/cave2.{c,o}): scan the two conn
+# slots (0x1A5B8/0x1A5D4, stride 0x1C); if inused (b[slot+0x12] & 0x20) AND
+# mask h[slot+8]==0 AND slot[0..5] == [0x10E34] -> tail-call the disconnect-
+# by-address executor 0x01E08A94(r0=slot) and RETURN (skip this page post;
+# the walker's 6 s rearm retries once the record is gone).  Otherwise tail-
+# call 0x01E1792E(1,6,0x10E34) = the original page post, different-device
+# incumbents untouched.  Combined with NOP'ing the cmd-5 kill (same effect as
+# --no-cmd5-kill; that flag alone = F4, field-FROZE repairs because nothing
+# killed the same-address stuck record - cave2 cures exactly that).
+# Mutually exclusive with --r1-conditional-kill (same cave region) and
+# --no-cmd5-kill (subsumed).
+# --------------------------------------------------------------------------
+R1B_HOOK_VA = 0x01E60DE4
+R1B_HOOK_CTX = bytes.fromhex("bdeaa3b5")               # stock call 0x01E1792E
+R1B_CAVE_VA = 0x01EA7758                               # free (434 B run)
+R1B_CAVE_BYTES = bytes.fromhex(
+    "7404c0ffb8a50100c1ff340e010002e1"   # push {rets,r4}; r0=0x1A5B8; r1=0x10E34; r2=r0+56
+    "380050ee02410b6454e8092883480360"   # loop: r4=b[slot+18]; r3=h[slot+8]; if((r4&32)==0) next; if(r3!=0) next; r3=[slot]
+    "146084e804300b621c6204e80b30c03c"   # r4=[tgt]; if(r3!=r4) next; r3=h[slot+4]; r4=h[tgt+4]; if(r3==r4) KILL; r0+=28
+    "82e9ef011216c3ff2e79e10140214126"   # if(r0<r2) loop; r2=r1; r3=0x01E1792E; r0=1; r1=6
+    "3404d300"                           # pop {rets,r4}; goto r3   (PAGE POST tail-call)
+    "c1ff948ae0013404d100"               # KILL: r1=0x01E08A94; pop {rets,r4}; goto r1 (r0=slot)
+)
+R1B_HOOK = encode_call(R1B_HOOK_VA, R1B_CAVE_VA)
+
+# --------------------------------------------------------------------------
+# --cmd5-target (R1-e, designed 2026-10-28, ch. 30 §30.14.11 + ch. 31):
+# targeted cmd-5 incumbent kill + press-time target store. The root defect:
+# the cmd-5 kill loop (ring consumer FUN_01e21af8 case 5, BTSTACK task) kills
+# every inused slot whose mask halfword is 0 — and SPP accessories keep
+# mask==0 while LIVE, so a Paired->Connect press on device B kills a live
+# device A (the class-dependent evictor of E7/F3V3-B). R1-c's handle test
+# fixed that but froze on same-address repair: the page guard FUN_01e16824
+# (call @0x01E21E76) refuses to page an address that still holds an inused
+# record, so the kill must remove the TARGET's record and nobody else's.
+# R1-a failed because reading the UI selection cell at cmd-5 time is
+# race-stale; R1-e instead STORES the pressed device's address into the
+# stack's own saved-target cell 0x0001A5F1 (written by ring cmd-0 @0x01E21C44
+# via `rep 4 6`) at press time, in the app task, where the list pointer r5
+# and index offset r4 are live. Two hooks, both running on the correct task:
+#   presstore  @0x01E6ECDA — the settings-press cmd-5 post `call 0x01E1792E`
+#              (r0=5, r1=0, r2=0 at 0x01E6ECD4-8) becomes a call to a 32-byte
+#              cave: recompute [[r5]+r4+8] (selected BD_ADDR, the exact load
+#              the same handler does at 0x01E6ECE4), copy 6 B to 0x0001A5F1
+#              with the stock `rep 4 6` block move, then replay the original
+#              post (r0=5, r1=0, r2=0, call 0x01E1792E) and rts.
+#   cmd5target @0x01E21EF0 — the mask load+test `19 60 81 42` becomes a goto
+#              to a 38-byte cave: kill iff handle@slot+6 == 0 (stuck record,
+#              R1-c's liveness test) OR slot[0..5] == [0x0001A5F1] (the
+#              pressed device — repair-any-class); every other inused slot
+#              survives -> goal multipoint. Loop continues at 0x01E21EF8
+#              either way (r4/r14 live across the killer call, r0-r3 scratch;
+#              the XOR-fold address compare is R1-a's, byte-identical forms).
+# Cave run 0x01EA76DE: F3-v3 uses up to 0x01EA7757, the r1cave window ends at
+# 0x01EA778A and the r1bcave window (76 B) ends at 0x01EA77A4, D1 (R1-f)
+# reserves 0x01EA7758..63 — R1-e caves sit at 0x01EA77A8 and 0x01EA77D0
+# (ALLZERO in v44/v45/v50, inside the pointer-scan-clean run). Mutually
+# exclusive with the other cmd-5 variants.
+# --------------------------------------------------------------------------
+CMD5T_HOOK_VA = 0x01E21EF0
+CMD5T_HOOK_CTX = bytes.fromhex("19608142")     # r1=h[r1+0]; if(r1!=0) skip
+CMD5T_KILLER_VA = 0x01E08A94                   # disconnect-by-address(r0=slot)
+CMD5T_LOOPCONT_VA = 0x01E21EF8                 # r0 = r4 + 13 (next slot)
+CMD5T_SAVE_VA = 0x0001A5F1                     # saved-target cell (6 B)
+CMD5T_CAVE_VA = 0x01EA77A8
+_c = CMD5T_CAVE_VA
+CMD5T_CAVE_BYTES = (
+    bytes.fromhex("0963")                       # r1 = h[r0+6]   (ACL handle)
+    + encode_branch2(_c + 2, _c + 0x0C, neq=True, reg=1)
+    + encode_call(_c + 4, CMD5T_KILLER_VA)     # KILL: killer(r0=slot)
+    + encode_goto32(_c + 8, CMD5T_LOOPCONT_VA)
+    + bytes.fromhex("c3ff") + CMD5T_SAVE_VA.to_bytes(4, "little")
+    + bytes.fromhex("0160")                     # r1 = [r0+0]
+    + bytes.fromhex("3260")                     # r2 = [r3+0]
+    + bytes.fromhex("2919")                     # r1 ^= r2
+    + bytes.fromhex("0a62")                     # r2 = h[r0+4]
+    + bytes.fromhex("2919")                     # r1 ^= r2
+    + bytes.fromhex("3b62")                     # r3 = h[r3+4]
+    + bytes.fromhex("3919")                     # r1 ^= r3  (0 = same device)
+    + encode_branch2(_c + 0x20, _c + 4, neq=False, reg=1)   # -> KILL
+    + encode_goto32(_c + 0x22, CMD5T_LOOPCONT_VA)           # skip this slot
+)
+assert len(CMD5T_CAVE_BYTES) == 0x26
+CMD5T_HOOK = encode_goto32(CMD5T_HOOK_VA, CMD5T_CAVE_VA)
+
+PRESST_HOOK_VA = 0x01E6ECDA                     # settings-press cmd-5 post
+PRESST_HOOK_CTX = bytes.fromhex("bdea2846")     # stock call 0x01E1792E
+PRESST_POSTER_VA = 0x01E1792E
+PRESST_CAVE_VA = 0x01EA77D0
+PRESST_CAVE_BYTES = (
+    bytes.fromhex("5060")                       # r0 = [r5+0]   (list base)
+    + bytes.fromhex("4018")                     # r0 += r4      (idx*0xC)
+    + bytes.fromhex("0062")                     # r0 = [r0+8]   (BD_ADDR ptr)
+    + bytes.fromhex("0116")                     # r1 = r0       (rep source)
+    + bytes.fromhex("c0ff") + CMD5T_SAVE_VA.to_bytes(4, "little")
+    + bytes.fromhex("108512078207")             # rep 4 6 { b[r0++] = b[r1++] }
+    + bytes.fromhex("4025" "4120" "4220")       # r0=5, r1=0, r2=0
+    + encode_call(PRESST_CAVE_VA + 0x1A, PRESST_POSTER_VA)
+    + bytes.fromhex("8000")                     # rts -> 0x01E6ECDE
+)
+assert len(PRESST_CAVE_BYTES) == 0x20
+PRESST_HOOK = encode_call(PRESST_HOOK_VA, PRESST_CAVE_VA)
+
+# The cmd5target hook overwrites the low half of the cmd5handle site, so
+# teach that state table (and thus find_app_start/--show) about it.
+CMD5HANDLE_STATES["target"] = CMD5T_HOOK[:2]
+CMD5HANDLE_LABELS["target"] = (
+    "goto cave 0x%08X (cmd-5 target kill; --cmd5-target)" % CMD5T_CAVE_VA
+)
+
 
 # Kept for tools/verify_actions.py: the native body addresses.
 ODPTT_PRESS_VA = PF_BODY8_VA
@@ -1493,7 +1838,10 @@ def build_patches(duplex_mode=4, ptt2_action="PTT2", odptt_action="OD-PTT",
                   force_role_keep=False, no_disconnect_13=False,
                   no_pairing_kick=False, no_cleanup_kick=False,
                   no_l2cap_teardown=False, no_spp_close=False,
-                  no_l2cap_disconnect=False):
+                  no_l2cap_disconnect=False, gate_close=False,
+                  no_cmd5_kill=False, r1_conditional_kill=False,
+                  r1_walker_kill=False, cmd5_handle=False,
+                  cmd5_target=False):
     """Return the patch table, with the `duplex` patch's target selected by
     `duplex_mode` (see DUPLEX_LABELS) and the `pflabels` multi-patch built
     for the (--PTT2, --OD-PTT) action pair (see PF_COMBO_PATCHES). The
@@ -1514,7 +1862,17 @@ def build_patches(duplex_mode=4, ptt2_action="PTT2", odptt_action="OD-PTT",
     (see L2CAPTEARDOWN_UI_VA / L2CAPTEARDOWN_MODE_VA); `no_spp_close` no-ops
     spp_channel_disconnect() (see SPPCLOSE_VA); `no_l2cap_disconnect` kills
     the 0x4a dispatch branch and the l2cap_disconnect() entry (see
-    L2CAPDISC_BRANCH_VA / L2CAPDISC_ENTRY_VA). All entries are always
+    L2CAPDISC_BRANCH_VA / L2CAPDISC_ENTRY_VA); `gate_close` installs the
+    conditional close gate: both close-primitive entries jump to cave stubs
+    that skip the close while the press-window page-pending flag
+    (GATE_FLAG_ADDR bit 7) is set and run stock otherwise (see
+    GATE_SPP_TRAMP_VA / GATE_L2CAP_TRAMP_VA / GATE_CAVE2_VA; mutually
+    exclusive with no_spp_close / no_l2cap_disconnect); `no_cmd5_kill` NOPs
+    the bt-task cmd-5 cleanup loop's sole call to the controller
+    disconnect-by-address helper (see CMD5KILL_VA), the press-time incumbent
+    killer located 2026-10-25 (ch. 30 SS30.13 Q1). `r1_walker_kill` = R1-b:
+    NOPs that cmd-5 kill AND installs the walker page-post conditional kill
+    (see R1B_HOOK_VA / R1B_CAVE_VA; ch. 30 SS30.14.6). All entries are always
     present so --show recognises all states."""
     if duplex_mode not in DUPLEX_STATES:
         raise SystemExit("--bluetooth-mode must be one of %s" % sorted(DUPLEX_STATES))
@@ -1633,6 +1991,178 @@ def build_patches(duplex_mode=4, ptt2_action="PTT2", odptt_action="OD-PTT",
         "ctx_variant": _ctx_variant_fn(PAIRKICK_ONE_VA, PAIRKICK_ONE_VA,
                                        PAIRKICK_ONE_CTX),
     }
+    c5 = "disabled" if (no_cmd5_kill or r1_walker_kill) else "stock"
+    patches["cmd5kill"] = {
+        "desc": "bt-task cmd-5 cleanup incumbent kill, sole call to 0x01E08A94 "
+                "(0x01E21EF4) -> %s" % c5,
+        "va": CMD5KILL_VA,
+        "new": CMD5KILL_STATES[c5],
+        "states": CMD5KILL_STATES,
+        "labels": CMD5KILL_LABELS,
+        "target": c5,
+        "ctx_va": CMD5KILL_VA,
+        "ctx_base": CMD5KILL_CTX,
+        "ctx_variant": _ctx_variant_fn(CMD5KILL_VA, CMD5KILL_VA, CMD5KILL_CTX),
+    }
+    c5h = "handle" if cmd5_handle else "stock"
+    patches["cmd5handle"] = {
+        "desc": "bt-task cmd-5 stuck-slot test load (0x01E21EF0) -> %s" % c5h,
+        "va": CMD5HANDLE_VA,
+        "new": CMD5HANDLE_STATES[c5h],
+        "states": CMD5HANDLE_STATES,
+        "labels": CMD5HANDLE_LABELS,
+        "target": c5h,
+        "ctx_va": CMD5HANDLE_CTX_VA,
+        "ctx_base": CMD5HANDLE_CTX,
+        "ctx_variant": _ctx_variant_fn(CMD5HANDLE_VA, CMD5HANDLE_CTX_VA,
+                                       CMD5HANDLE_CTX),
+    }
+    if r1_conditional_kill:
+        r1k = "conditional"
+    elif no_cmd5_kill or r1_walker_kill:
+        r1k = "disabled"
+    else:
+        r1k = "stock"
+    patches["r1condkill"] = {
+        "desc": "bt-task cmd-5 cleanup incumbent kill, sole call to 0x01E08A94 "
+                "(0x01E21EF4) -> %s" % r1k,
+        "va": R1_KILL_HOOK_VA,
+        "new": {"conditional": R1_KILL_HOOK, "disabled": b"\x00\x00\x00\x00",
+                "stock": R1_KILL_CTX}[r1k],
+        "states": {"stock": R1_KILL_CTX, "conditional": R1_KILL_HOOK,
+                   "disabled": b"\x00\x00\x00\x00"},
+        "labels": {"stock": "call 0x01E08A94 (cmd-5 kill active, unconditional)",
+                   "conditional": "call cave 0x01EA7758 (kill only stuck/"
+                                  "same-device/not-in-Paired-UI)",
+                   "disabled": "NOP (cmd-5 kill disabled; --no-cmd5-kill/"
+                               "--r1-walker-kill)"},
+        "target": r1k,
+        "ctx_va": R1_KILL_HOOK_VA,
+        "ctx_base": R1_KILL_CTX,
+        "ctx_variant": _ctx_variant_fn(R1_KILL_HOOK_VA, R1_KILL_HOOK_VA,
+                                       R1_KILL_CTX),
+    }
+    patches["r1cave"] = {
+        "desc": "code cave @0x%08X: R1 conditional-kill predicate" % R1_CAVE_VA,
+        "va": R1_CAVE_VA,
+        "new": R1_CAVE_BYTES if r1_conditional_kill
+               else b"\x00" * len(R1_CAVE_BYTES),
+        "states": {"native": b"\x00" * len(R1_CAVE_BYTES),
+                   "r1cave": R1_CAVE_BYTES},
+        "labels": {"native": "erased (all zero)",
+                   "r1cave": "predicate: kill iff stuck | list-dead | same-dev"},
+        "target": "r1cave" if r1_conditional_kill else "native",
+        "ctx_va": R1_CAVE_VA,
+        "ctx_base": b"\x00" * len(R1_CAVE_BYTES),
+        "ctx_variant": _ctx_variant_fn(R1_CAVE_VA, R1_CAVE_VA,
+                                       b"\x00" * len(R1_CAVE_BYTES)),
+    }
+    # r1bcave shares r1cave's VA (same cave region, mutually exclusive
+    # payloads): teach each state table about the other's bytes so every
+    # image stays recognised, and make the non-active entry write the
+    # ACTIVE payload's bytes (zero-padded) so apply order can't clobber.
+    R1B_PAD_R1 = (R1_CAVE_BYTES
+                  + b"\x00" * (len(R1B_CAVE_BYTES) - len(R1_CAVE_BYTES)))
+    patches["r1cave"]["states"]["r1bcave"] = R1B_CAVE_BYTES[:len(R1_CAVE_BYTES)]
+    patches["r1cave"]["labels"]["r1bcave"] = "walker-kill cave (R1-b)"
+    patches["r1bcave"] = {
+        "desc": "code cave @0x%08X: R1-b walker conditional-kill predicate"
+                % R1B_CAVE_VA,
+        "va": R1B_CAVE_VA,
+        "new": (R1B_CAVE_BYTES if r1_walker_kill else
+                R1B_PAD_R1 if r1_conditional_kill else
+                b"\x00" * len(R1B_CAVE_BYTES)),
+        "states": {"native": b"\x00" * len(R1B_CAVE_BYTES),
+                   "r1bcave": R1B_CAVE_BYTES,
+                   "r1cave": R1B_PAD_R1},
+        "labels": {"native": "erased (all zero)",
+                   "r1bcave": "walker kill: kill iff same-addr stuck rec",
+                   "r1cave": "R1-a predicate cave (dead hook)"},
+        "target": "r1bcave" if r1_walker_kill else "native",
+        "ctx_va": R1B_CAVE_VA,
+        "ctx_base": b"\x00" * len(R1B_CAVE_BYTES),
+        "ctx_variant": _ctx_variant_fn(R1B_CAVE_VA, R1B_CAVE_VA,
+                                       b"\x00" * len(R1B_CAVE_BYTES)),
+    }
+    patches["r1bhook"] = {
+        "desc": "walker FUN_01e60d34 page post, call 0x01E1792E (0x01E60DE4) "
+                "-> %s" % ("r1bhook" if r1_walker_kill else "stock"),
+        "va": R1B_HOOK_VA,
+        "new": R1B_HOOK if r1_walker_kill else R1B_HOOK_CTX,
+        "states": {"stock": R1B_HOOK_CTX, "r1bhook": R1B_HOOK},
+        "labels": {"stock": "call 0x01E1792E (page post, stock)",
+                   "r1bhook": "call cave 0x%08X (walker conditional kill)"
+                              % R1B_CAVE_VA},
+        "target": "r1bhook" if r1_walker_kill else "stock",
+        "ctx_va": R1B_HOOK_VA,
+        "ctx_base": R1B_HOOK_CTX,
+        "ctx_variant": _ctx_variant_fn(R1B_HOOK_VA, R1B_HOOK_VA,
+                                       R1B_HOOK_CTX),
+    }
+    c5t = "target" if cmd5_target else "stock"
+    patches["cmd5target"] = {
+        "desc": "bt-task cmd-5 kill test (0x01E21EF0) -> %s" % c5t,
+        "va": CMD5T_HOOK_VA,
+        "new": CMD5T_HOOK if cmd5_target else CMD5T_HOOK_CTX,
+        "states": {"stock": CMD5T_HOOK_CTX,
+                   "handle": bytes.fromhex("09638142"),
+                   "target": CMD5T_HOOK},
+        "labels": {"stock": "r1 = h[r1+0]; if (r1 != 0) skip (mask test)",
+                   "handle": "r1 = h[r0+6] half changed (R1-c, --cmd5-handle)",
+                   "target": "goto cave 0x%08X (kill iff stuck | same-as-"
+                             "stored-target)" % CMD5T_CAVE_VA},
+        "target": c5t,
+        "ctx_va": CMD5T_HOOK_VA,
+        "ctx_base": CMD5T_HOOK_CTX,
+        "ctx_variant": _ctx_variant_fn(CMD5T_HOOK_VA, CMD5T_HOOK_VA,
+                                       CMD5T_HOOK_CTX),
+    }
+    patches["cmd5tcave"] = {
+        "desc": "code cave @0x%08X: R1-e cmd-5 target-kill predicate" % CMD5T_CAVE_VA,
+        "va": CMD5T_CAVE_VA,
+        "new": CMD5T_CAVE_BYTES if cmd5_target
+               else b"\x00" * len(CMD5T_CAVE_BYTES),
+        "states": {"native": b"\x00" * len(CMD5T_CAVE_BYTES),
+                   "cmd5tcave": CMD5T_CAVE_BYTES},
+        "labels": {"native": "erased (all zero)",
+                   "cmd5tcave": "kill iff handle==0 | addr==0x0001A5F1"},
+        "target": "cmd5tcave" if cmd5_target else "native",
+        "ctx_va": CMD5T_CAVE_VA,
+        "ctx_base": b"\x00" * len(CMD5T_CAVE_BYTES),
+        "ctx_variant": _ctx_variant_fn(CMD5T_CAVE_VA, CMD5T_CAVE_VA,
+                                       b"\x00" * len(CMD5T_CAVE_BYTES)),
+    }
+    ps = "stored" if cmd5_target else "stock"
+    patches["presstore"] = {
+        "desc": "settings-press cmd-5 post, call 0x01E1792E (0x01E6ECDA) "
+                "-> %s" % ps,
+        "va": PRESST_HOOK_VA,
+        "new": PRESST_HOOK if cmd5_target else PRESST_HOOK_CTX,
+        "states": {"stock": PRESST_HOOK_CTX, "stored": PRESST_HOOK},
+        "labels": {"stock": "call 0x01E1792E (cmd-5 post, stock)",
+                   "stored": "call cave 0x%08X (store selected addr -> "
+                             "0x0001A5F1, replay post)" % PRESST_CAVE_VA},
+        "target": ps,
+        "ctx_va": PRESST_HOOK_VA,
+        "ctx_base": PRESST_HOOK_CTX,
+        "ctx_variant": _ctx_variant_fn(PRESST_HOOK_VA, PRESST_HOOK_VA,
+                                       PRESST_HOOK_CTX),
+    }
+    patches["presstcave"] = {
+        "desc": "code cave @0x%08X: R1-e press target store" % PRESST_CAVE_VA,
+        "va": PRESST_CAVE_VA,
+        "new": PRESST_CAVE_BYTES if cmd5_target
+               else b"\x00" * len(PRESST_CAVE_BYTES),
+        "states": {"native": b"\x00" * len(PRESST_CAVE_BYTES),
+                   "presstcave": PRESST_CAVE_BYTES},
+        "labels": {"native": "erased (all zero)",
+                   "presstcave": "copy [[r5]+r4+8] 6 B -> 0x0001A5F1, post 5"},
+        "target": "presstcave" if cmd5_target else "native",
+        "ctx_va": PRESST_CAVE_VA,
+        "ctx_base": b"\x00" * len(PRESST_CAVE_BYTES),
+        "ctx_variant": _ctx_variant_fn(PRESST_CAVE_VA, PRESST_CAVE_VA,
+                                       b"\x00" * len(PRESST_CAVE_BYTES)),
+    }
     ck = "disabled" if no_cleanup_kick else "stock"
     patches["cleanupkickvar"] = {
         "desc": "app cleanup kick, variable-reason event (0x01E19AD0) -> %s" % ck,
@@ -1699,6 +2229,19 @@ def build_patches(duplex_mode=4, ptt2_action="PTT2", odptt_action="OD-PTT",
                                        L2CAPTEARDOWN_MODE_VA,
                                        L2CAPTEARDOWN_MODE_CTX),
     }
+    patches["l2capteardownapp"] = {
+        "desc": "app L2CAP teardown, AT/SPP-dispatcher 0x4a post (0x01E4F804) -> %s" % lt,
+        "va": L2CAPTEARDOWN_APP_VA,
+        "new": L2CAPTEARDOWN_APP_STATES[lt],
+        "states": L2CAPTEARDOWN_APP_STATES,
+        "labels": L2CAPTEARDOWN_LABELS,
+        "target": lt,
+        "ctx_va": L2CAPTEARDOWN_APP_VA,
+        "ctx_base": L2CAPTEARDOWN_APP_CTX,
+        "ctx_variant": _ctx_variant_fn(L2CAPTEARDOWN_APP_VA,
+                                       L2CAPTEARDOWN_APP_VA,
+                                       L2CAPTEARDOWN_APP_CTX),
+    }
     sc = "disabled" if no_spp_close else "stock"
     patches["sppclose"] = {
         "desc": "app spp_channel_disconnect() entry (0x01E173EE) -> %s" % sc,
@@ -1739,6 +2282,54 @@ def build_patches(duplex_mode=4, ptt2_action="PTT2", odptt_action="OD-PTT",
         "ctx_variant": _ctx_variant_fn(L2CAPDISC_ENTRY_VA,
                                        L2CAPDISC_ENTRY_VA,
                                        L2CAPDISC_ENTRY_CTX),
+    }
+    gc = "gated" if gate_close else "stock"
+    patches["gatespptramp"] = {
+        "desc": "spp_channel_disconnect() entry gate trampoline (0x01E173EC) -> %s" % gc,
+        "va": GATE_SPP_TRAMP_VA,
+        "new": GATE_SPP_TRAMP if gate_close else bytes.fromhex("1004c0ff"),
+        "states": {"stock": bytes.fromhex("1004c0ff"),
+                   "gated": GATE_SPP_TRAMP,
+                   "e10": bytes.fromhex("10044020")},
+        "labels": {"stock": "entry runs stock",
+                   "gated": "goto cave stub (close skipped while page-pending)",
+                   "e10": "--no-spp-close no-op present (mutually exclusive)"},
+        "target": gc,
+        "ctx_va": GATE_SPP_TRAMP_VA,
+        "ctx_base": GATE_SPP_CTX,
+        "ctx_variant": _ctx_variant_fn(GATE_SPP_TRAMP_VA,
+                                       GATE_SPP_TRAMP_VA,
+                                       GATE_SPP_CTX),
+    }
+    patches["gatel2captramp"] = {
+        "desc": "l2cap_disconnect() entry gate trampoline (0x01E173D0) -> %s" % gc,
+        "va": GATE_L2CAP_TRAMP_VA,
+        "new": GATE_L2CAP_TRAMP if gate_close else bytes.fromhex("1004bfea"),
+        "states": {"stock": bytes.fromhex("1004bfea"),
+                   "gated": GATE_L2CAP_TRAMP,
+                   "e11": bytes.fromhex("00238000")},
+        "labels": {"stock": "entry runs stock",
+                   "gated": "goto cave stub (close skipped while page-pending)",
+                   "e11": "--no-l2cap-disconnect no-op present (mutually exclusive)"},
+        "target": gc,
+        "ctx_va": GATE_L2CAP_TRAMP_VA,
+        "ctx_base": GATE_L2CAP_CTX,
+        "ctx_variant": _ctx_variant_fn(GATE_L2CAP_TRAMP_VA,
+                                       GATE_L2CAP_TRAMP_VA,
+                                       GATE_L2CAP_CTX),
+    }
+    patches["gatecave"] = {
+        "desc": "code cave @0x%08X: close-gate stubs (spp + l2cap)" % GATE_CAVE2_VA,
+        "va": GATE_CAVE2_VA,
+        "new": GATE_CAVE2_IMG if gate_close else b"\x00" * GATE_CAVE2_LEN,
+        "states": {"native": b"\x00" * GATE_CAVE2_LEN, "gated": GATE_CAVE2_IMG},
+        "labels": {"native": "erased (all zero)",
+                   "gated": "gate stubs (flag test + replay + resume)"},
+        "target": "gated" if gate_close else "native",
+        "ctx_va": GATE_CAVE2_VA,
+        "ctx_base": b"\x00" * GATE_CAVE2_LEN,
+        "ctx_variant": _ctx_variant_fn(GATE_CAVE2_VA, GATE_CAVE2_VA,
+                                       b"\x00" * GATE_CAVE2_LEN),
     }
     for name, (va, ctx_va, ctx_hex, native, spp, what) in KEYCODE_PATCHES.items():
         states = {"native": bytes([0x48, native]), "spp": bytes([0x48, spp])}
@@ -2397,6 +2988,104 @@ def main():
         "multipoint recipe.",
     )
     ap.add_argument(
+        "--no-cmd5-kill",
+        dest="no_cmd5_kill",
+        action="store_true",
+        help="MULTIPOINT (EXPERIMENTAL / UNTESTED): NOP the bt-task cmd-5 "
+        "cleanup loop's call to FUN_01e08a94 (0x01E21EF4), the sole caller "
+        "site of the controller 0xCFE disconnect-by-address command "
+        "(handler 0x01E0DDA4 -> executor FUN_01e091EA, reason 0x13). This "
+        "is the press-time incumbent killer located 2026-10-25 (ch. 30 "
+        "SS30.13 Q1): the Paired->Connect press posts cmd 5 at 0x01E61E18 "
+        "(live in ALL E1-E11/F builds - E9 only killed the adjacent 0x4A "
+        "post), which disconnected the incumbent at 0 s via a path touching "
+        "none of the other NOP'd sites. Cmd 5 is fire-and-forget, so this "
+        "NOP should not deadlock. SIDE EFFECTS: the 'connect selected "
+        "device' cleanup no longer releases stale/idle links; power-cycle "
+        "instead. Requires the full multipoint recipe.",
+    )
+    ap.add_argument(
+        "--r1-conditional-kill",
+        dest="r1_conditional_kill",
+        action="store_true",
+        help="MULTIPOINT (EXPERIMENTAL / UNTESTED): replace the cmd-5 "
+        "cleanup loop's incumbent kill (0x01E21EF4) with a CALL to a "
+        "50-byte predicate cave at 0x01EA7758 (ch. 30 SS30.13 R1-a). The "
+        "cave kills iff the slot is stuck (handle==0), the paired list is "
+        "not alive (BT-off/power-down paths keep stock behavior), or the "
+        "slot's address equals the UI-selected device (phantom-repair keeps "
+        "stock behavior); a DIFFERENT-device incumbent is kept, after which "
+        "the page to the selected device still fires (E6-proven path). "
+        "Unlike --no-cmd5-kill (F4, field-FAILED: wholesale NOP wedges the "
+        "connect flow on any press) this preserves every stock cleanup "
+        "function. Mutually exclusive with --no-cmd5-kill (same 4 bytes). "
+        "FIELD-FAILED 2026-10-27 (freeze, ch. 30 SS30.14.6): the selection "
+        "cell read at cmd-5 time is race-stale on the Paired-screen path. "
+        "See --r1-walker-kill for the successor. Requires the full "
+        "multipoint recipe.",
+    )
+    ap.add_argument(
+        "--r1-walker-kill",
+        dest="r1_walker_kill",
+        action="store_true",
+        help="MULTIPOINT R1-b (EXPERIMENTAL / UNTESTED, ch. 30 SS30.14.6): "
+        "NOP the cmd-5 cleanup kill (0x01E21EF4) AND hook the walker "
+        "FUN_01e60d34 page post (0x01E60DE4) with a 78-byte cave at "
+        "0x01EA7758 that kills only a same-address stuck conn record "
+        "(inused, mask==0, slot[0..5]==armed target [0x10E34]) before "
+        "skipping one post cycle (6 s rearm), else replays the page post. "
+        "At this site the target cell is FRESH (CON pump cases 8/0xb write "
+        "it then call the walker synchronously) - unlike the cmd-5 site "
+        "used by --r1-conditional-kill (field-FAILED). A different-device "
+        "incumbent is never killed -> goal multipoint; same-device repair "
+        "keeps working via the kill. Subsumes --no-cmd5-kill. Mutually "
+        "exclusive with --no-cmd5-kill and --r1-conditional-kill. Requires "
+        "the full multipoint recipe.",
+    )
+    ap.add_argument(
+        "--cmd5-handle",
+        dest="cmd5_handle",
+        action="store_true",
+        help="MULTIPOINT R1-c (EXPERIMENTAL / UNTESTED, ch. 30 SS30.14.9): "
+        "re-encode the cmd-5 stuck-slot test at 0x01E21EF0 from "
+        "'r1 = h[r1+0]' (mask halfword at slot+8) to 'r1 = h[r0+6]' (ACL "
+        "handle at slot+6): 2 bytes 19 60 -> 09 63. Accessories (TID-PTT) "
+        "keep mask==0 while LIVE, so the stock mask test makes cmd 5 kill "
+        "them on every Paired->Connect press - the class-dependent evictor "
+        "of E7/F3V3-B. The handle test kills only genuinely stuck records "
+        "(inused, no ACL), the same liveness test ring cases 4 and 0x4a "
+        "use. cmd 5 stays LIVE (no F4-style deadlock) and the kill runs on "
+        "the btstack task, honouring the killer's queue-post task contract "
+        "that froze R1-a/R1-b. Mutually exclusive with --no-cmd5-kill, "
+        "--r1-conditional-kill and --r1-walker-kill (they disable or "
+        "replace this kill). Requires the full multipoint recipe.",
+    )
+    ap.add_argument(
+        "--cmd5-target",
+        dest="cmd5_target",
+        action="store_true",
+        help="MULTIPOINT R1-e (EXPERIMENTAL / UNTESTED, ch. 30 SS30.14.11 "
+        "+ ch. 31): targeted cmd-5 incumbent kill. Two hooks. (1) Press "
+        "store: the settings-press cmd-5 post call 0x01E1792E (0x01E6ECDA) "
+        "becomes a call to a 32-byte cave that first copies the selected "
+        "device's BD_ADDR ([[r5]+r4+8], the same load the handler does at "
+        "0x01E6ECE4) into the stack saved-target cell 0x0001A5F1, then "
+        "replays the post. (2) Target kill: the cmd-5 loop's mask test "
+        "19 60 81 42 (0x01E21EF0) becomes a goto to a 38-byte cave that "
+        "kills a slot iff its ACL handle (slot+6) is 0 (stuck record) OR "
+        "its address equals the stored target (same-device repair) - a "
+        "DIFFERENT live incumbent survives, then the page to the target "
+        "fires (E6-proven outgoing-join direction). Unlike --cmd5-handle "
+        "(R1-c, froze: same-address page guard 0x01E16824 refuses to page "
+        "an address still holding an inused record) repair works for any "
+        "class, and unlike --r1-conditional-kill (R1-a, froze: selection "
+        "cell race-stale at cmd-5 time) the address is captured fresh at "
+        "press time in the app task. Cave sites 0x01EA77A8/0x01EA77D0. "
+        "Mutually exclusive with --no-cmd5-kill, --r1-conditional-kill, "
+        "--r1-walker-kill and --cmd5-handle (same cmd-5 kill). Requires "
+        "the full multipoint recipe.",
+    )
+    ap.add_argument(
         "--no-cleanup-kick",
         dest="no_cleanup_kick",
         action="store_true",
@@ -2418,9 +3107,12 @@ def main():
         action="store_true",
         help="MULTIPOINT (EXPERIMENTAL / UNTESTED): stop the app's L2CAP "
         "channel-close (the eviction layer that survived E6/E7/E8). NOPs "
-        "the two user_send_cmd_prepare(0x4a) posts: 0x01E61E22 in the "
-        "Paired->Connect UI handler (unconditional) and 0x01E60188 in the "
-        "routing-mode setter (mode change while a link is active). 0x4a "
+        "the three user_send_cmd_prepare(0x4a) posts: 0x01E61E22 in the "
+        "Paired->Connect UI handler (unconditional), 0x01E60188 in the "
+        "routing-mode setter (mode change while a link is active) and "
+        "0x01E4F804 in FUN_01e4f652 (AT/SPP command dispatcher; found by "
+        "the F3-B full-census re-audit 2026-10-24 - the press-time evictor "
+        "that survived the other two NOPs). 0x4a "
         "runs l2cap_disconnect_all_channel(): it forces every open L2CAP "
         "channel to state 0xd and pumps l2cap_run, which sends the L2CAP "
         "Disconnection Request seen in the E8 capture while the HCI-level "
@@ -2467,6 +3159,23 @@ def main():
         "multipoint recipe.",
     )
     ap.add_argument(
+        "--gate-close",
+        dest="gate_close",
+        action="store_true",
+        help="MULTIPOINT (EXPERIMENTAL / UNTESTED, ch.30 F3): CONDITIONAL "
+        "version of --no-spp-close/--no-l2cap-disconnect. spp_channel_"
+        "disconnect() and l2cap_disconnect() entries jump to code-cave "
+        "stubs that return 0 (skip the close) ONLY while the press-window "
+        "page-pending flag (RAM 0x1A662 bit 7, set by the menu Connect "
+        "press, cleared by the no-connection timeout) is set; every other "
+        "close runs stock. E11 proved these two entries are the whole "
+        "evictor, but its unconditional NOPs deadlocked the app "
+        "(ch. 27 SS 27.19); the gate keeps normal teardown intact. The "
+        "flag is sticky after a successful connect: closes stay skipped "
+        "until BT-off/power-cycle. Mutually exclusive with --no-spp-close "
+        "and --no-l2cap-disconnect (same entry bytes). ch. 30 SS 30.11.",
+    )
+    ap.add_argument(
         "--sectors",
         metavar="PREFIX",
         help="also export the changed 4 KiB flash sectors as PREFIX_<addr>.bin "
@@ -2487,13 +3196,50 @@ def main():
             % ptt_action
         )
     validate_pf_combo(a7, a8)
+    if args.gate_close and (args.no_spp_close or args.no_l2cap_disconnect):
+        raise SystemExit(
+            "--gate-close rewrites the same function entries as "
+            "--no-spp-close / --no-l2cap-disconnect (0x01E173EC / "
+            "0x01E173D0); pick the conditional gate OR the unconditional "
+            "no-ops, not both."
+        )
+    if args.r1_conditional_kill and args.no_cmd5_kill:
+        raise SystemExit(
+            "--r1-conditional-kill and --no-cmd5-kill both rewrite the "
+            "same 4 bytes at 0x01E21EF4 (call -> cave vs NOP); pick the "
+            "conditional predicate OR the wholesale NOP, not both."
+        )
+    if args.r1_walker_kill and (args.no_cmd5_kill or args.r1_conditional_kill):
+        raise SystemExit(
+            "--r1-walker-kill subsumes --no-cmd5-kill (it NOPs the cmd-5 "
+            "kill itself) and uses the same cave region 0x01EA7758 as "
+            "--r1-conditional-kill; pick one R1 variant."
+        )
+    if args.cmd5_handle and (args.no_cmd5_kill or args.r1_conditional_kill
+                             or args.r1_walker_kill or args.cmd5_target):
+        raise SystemExit(
+            "--cmd5-handle fixes the cmd-5 kill's stuck test; "
+            "--no-cmd5-kill / --r1-conditional-kill / --r1-walker-kill / "
+            "--cmd5-target disable or replace that kill outright - pick "
+            "one variant."
+        )
+    if args.cmd5_target and (args.no_cmd5_kill or args.r1_conditional_kill
+                             or args.r1_walker_kill):
+        raise SystemExit(
+            "--cmd5-target rewrites the cmd-5 kill test itself; "
+            "--no-cmd5-kill / --r1-conditional-kill / --r1-walker-kill "
+            "disable or replace that kill - pick one variant."
+        )
 
     PATCHES = build_patches(args.bluetooth_mode, a7, a8, args.conn_num,
                             args.no_kick, args.force_page_scan,
                             args.force_role_keep, args.no_disconnect_13,
                             args.no_pairing_kick, args.no_cleanup_kick,
                             args.no_l2cap_teardown, args.no_spp_close,
-                            args.no_l2cap_disconnect)
+                            args.no_l2cap_disconnect, args.gate_close,
+                            args.no_cmd5_kill, args.r1_conditional_kill,
+                            args.r1_walker_kill, args.cmd5_handle,
+                            args.cmd5_target)
 
     raw, app, app_start = load_app(args.src)
     print("source: %s (%d bytes)" % (args.src, len(raw)))
@@ -2522,6 +3268,16 @@ def main():
         extra += " --no-spp-close (multipoint)"
     if args.no_l2cap_disconnect:
         extra += " --no-l2cap-disconnect (multipoint)"
+    if args.gate_close:
+        extra += " --gate-close (multipoint F3)"
+    if args.no_cmd5_kill:
+        extra += " --no-cmd5-kill (multipoint F4)"
+    if args.r1_conditional_kill:
+        extra += " --r1-conditional-kill (multipoint R1-a)"
+    if args.r1_walker_kill:
+        extra += " --r1-walker-kill (multipoint R1-b)"
+    if args.cmd5_handle:
+        extra += " --cmd5-handle (multipoint R1-c)"
     print("configuration: --bluetooth-mode %d --PTT=%s --PTT2=%s --OD-PTT=%s%s\n"
           % (args.bluetooth_mode, ptt_action, a7, a8, extra))
 
@@ -2557,11 +3313,23 @@ def main():
     if args.no_cleanup_kick:
         wanted += ["cleanupkickvar", "cleanupkickorphan", "cleanupkickprof"]
     if args.no_l2cap_teardown:
-        wanted += ["l2capteardownui", "l2capteardownmode"]
+        wanted += ["l2capteardownui", "l2capteardownmode", "l2capteardownapp"]
     if args.no_spp_close:
         wanted += ["sppclose"]
     if args.no_l2cap_disconnect:
         wanted += ["l2capdiscbranch", "l2capdiscentry"]
+    if args.gate_close:
+        wanted += ["gatespptramp", "gatel2captramp", "gatecave"]
+    if args.no_cmd5_kill:
+        wanted += ["cmd5kill"]
+    if args.r1_conditional_kill:
+        wanted += ["r1condkill", "r1cave"]
+    if args.r1_walker_kill:
+        wanted += ["cmd5kill", "r1condkill", "r1bhook", "r1bcave"]
+    if args.cmd5_handle:
+        wanted += ["cmd5handle"]
+    if args.cmd5_target:
+        wanted += ["presstore", "presstcave", "cmd5target", "cmd5tcave"]
     wanted = list(dict.fromkeys(wanted))
     if ({"pfbody7", "pfbody8", "pfrelease", "pflabels"} & set(wanted)
             and PF_LITERAL_PATCHES & set(wanted)):

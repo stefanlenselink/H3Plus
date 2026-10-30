@@ -31,6 +31,51 @@ Configuration workarounds are **ruled out** — `BT Int Mic` has no effect on a 
 > (§27.11) with the PC in the SPP role. The plan starts with a full-image clean baseline
 > reflash, re-verifies BT-PTT/BT-PTT2/OD keys per device, then walks the M1–M4 stage
 > ladder with strictly-specified, fully-recorded experiment cards (ch. 30).
+>
+> **Update 2026-10-28 — R1 cycle: three fails, then the freeze ROOT-CAUSED:** R1-a
+> (`--r1-conditional-kill`), R1-b (`--r1-walker-kill`) and R1-c (`--cmd5-handle`)
+> all field-**FAILED with the identical Connect freeze** (R1-c additionally never
+> reached its GOAL case — the same-device sanity press wedged first). Static
+> root cause, objdump-verified
+> ([§30.14.10](30-two-device-plan.md#301410--r1-c-field-failed-the-freeze-root-caused-the-press-flow-waits-for-the-kill-2026-10-2728)):
+> **the press flow itself waits for the current ACL to drop** — settings path
+> `FUN_01e600b4` has two unbounded `dly(10)` loops waiting for ANY link down
+> before its direct cmd-1 page post, and the modal path needs a CON event 3 →
+> `b4f0` bit0 → watchdog → bit3 clear to arm the walker. Stock cmd 5's kill is
+> the load-bearing event satisfying both; every prior patch removed the kill but
+> left the wait. **R1-d (walker→cmd 4) NO-GO** (cmd-4 executor E7-NOP'd —
+> readback-verified; walker never armed; bit3 gates it). **Approach change:
+> patch the WAIT, not the kill** — D1 (same-address wait retarget in
+> `FUN_01e600b4`) / D2 (modal-release cave), byte-level static GO/NO-GO before
+> any build. Known-best remains **F3-v3 `1a1eaca1`**; radio on R1-c `ee0ba984`,
+> rollback `sudo bash work/ch30_r1crb.sh` (one sector).
+>
+> **Update 2026-10-29 — R2 static analysis landed ([Ch. 31](31-bluetooth-10-connect-press-flow.md)),
+> CORRECTING the root cause above:** `FUN_01e600b4`'s wait loops read a
+> ***transitional*-controller-link** check (`FUN_01e17f26`→`FUN_01e07bd4`; a stable link
+> reads 0), so the press never waited for the incumbent to drop — the R1-c freeze is the
+> **same-address page guard** `0x01E16824` (call @`0x01E21E76`) refusing to page an already
+> connected address → silent "Connecting". Press = settings handler `FUN_01e6ec9e`
+> (cmd-5 post `call 0x01E1792E` @`0x01E6ECDA`); the address-less modal press propagates no
+> target. Verdicts: **D1 = GO** (3-site recipe; optional R1-f hardening) / **D2 = NO-GO**.
+> The resulting **R1-e design** — press-store hook + target-aware cmd-5 kill (`--cmd5-target`,
+> *not yet implemented*) on the F3-v3 base, expected sectors `0x026000`+`0x073000`+`0x0AC000`
+> — is specified in
+> [§30.14.11](30-two-device-plan.md#301411--r2-press-flow-analysis-and-the-r1-e-design-2026-10-28);
+> implementation, build and hardware test pending. Radio still on R1-c.
+
+> **Update 2026-10-30 — R1-e IMPLEMENTED + BUILT (`--cmd5-target`), awaiting flash:**
+> the flag is live in `tools/patch_h3plus_firmware_bluetooth.py` — four sites
+> (`presstore` hook @`0x01E6ECDA` → cave `0x01EA77D0`; `cmd5target` hook @`0x01E21EF0`
+> → cave `0x01EA77A8`; cave VAs moved from the design note because the always-present
+> `r1bcave` state window ends `0x01EA77A4`), all four **objdump round-trip verified**
+> against the official JieLi objdump; both suites green incl. new R1-e build/combo/
+> refusal cases. Image `work/ch30_r1e.bin` sha `d2aa7d8d…` = F3-v3 recipe +
+> `--cmd5-target`; diff vs F3-v3 = exactly sectors `0x026000`+`0x073000`+`0x0AC000`
+> (73 B) — the §30.14.11 sector prediction confirmed. Stage `work/ch30_r1e.sh` +
+> card `work/ch30_r1ec.sh` (T1 repair regression = the R1-c freeze case, T2/T3 GOAL
+> orders A/B, T4 fresh pairing, T5 BT off/on) ready. Radio still on R1-c; rollback
+> `work/ch30_r1crb.sh`. UNTESTED — nothing flashed 2026-10-30.
 
 See [§9A.7](08-bluetooth-1-discovery-and-whitelist.md#9a7-the-stretch-goal--ptt-button--separate-headset) and now [§9B](22-bluetooth-7-multipoint-architecture.md). The app layer is mapped: it models **one** remote device (single global struct at `0x102F0`, 809 refs). The SDK's `btstack.a` API proves 1-to-2 multipoint with call pre-empt/restore is a supported stack feature ([Ch. 24 §24.4](24-jieli-ecosystem-sdk-toolchain.md#244-bt-stack--the-multipoint-answer-ch-22-open-question-b)).
 
