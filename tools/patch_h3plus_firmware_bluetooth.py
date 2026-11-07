@@ -1533,12 +1533,13 @@ R1B_HOOK = encode_call(R1B_HOOK_VA, R1B_CAVE_VA)
 #              with the stock `rep 4 6` block move, then replay the original
 #              post (r0=5, r1=0, r2=0, call 0x01E1792E) and rts.
 #   cmd5target @0x01E21EF0 — the mask load+test `19 60 81 42` becomes a goto
-#              to a 38-byte cave: kill iff handle@slot+6 == 0 (stuck record,
+#              to a 40-byte cave: kill iff handle@slot+6 == 0 (stuck record,
 #              R1-c's liveness test) OR slot[0..5] == [0x0001A5F1] (the
 #              pressed device — repair-any-class); every other inused slot
 #              survives -> goal multipoint. Loop continues at 0x01E21EF8
 #              either way (r4/r14 live across the killer call, r0-r3 scratch;
-#              the XOR-fold address compare is R1-a's, byte-identical forms).
+#              the address compare is a BYTE-wise XOR-fold — 0x1A5F1 is odd,
+#              multi-byte loads there fault, see R1-e2 note below).
 # Cave run 0x01EA76DE: F3-v3 uses up to 0x01EA7757, the r1cave window ends at
 # 0x01EA778A and the r1bcave window (76 B) ends at 0x01EA77A4, D1 (R1-f)
 # reserves 0x01EA7758..63 — R1-e caves sit at 0x01EA77A8 and 0x01EA77D0
@@ -1552,23 +1553,30 @@ CMD5T_LOOPCONT_VA = 0x01E21EF8                 # r0 = r4 + 13 (next slot)
 CMD5T_SAVE_VA = 0x0001A5F1                     # saved-target cell (6 B)
 CMD5T_CAVE_VA = 0x01EA77A8
 _c = CMD5T_CAVE_VA
+# NOTE (2026-10-30, R1-e2): the first cave build compared the target cell with
+# multi-byte loads ([r3+0] word, h[r3+4] half) — but 0x0001A5F1 is ODD and
+# pi32v2 faults on misaligned multi-byte access (the vendor builds the slot+0xF
+# misaligned word byte-by-byte 30 B earlier in this very loop). Field R1-e
+# hard-locked the radio on any Connect press with a live slot (§30.14.12).
+# The compare below is byte-wise: XOR-fold 6 slot bytes + 6 target bytes into
+# r1 with post-increment byte loads (all forms objdump round-trip verified).
 CMD5T_CAVE_BYTES = (
     bytes.fromhex("0963")                       # r1 = h[r0+6]   (ACL handle)
     + encode_branch2(_c + 2, _c + 0x0C, neq=True, reg=1)
     + encode_call(_c + 4, CMD5T_KILLER_VA)     # KILL: killer(r0=slot)
     + encode_goto32(_c + 8, CMD5T_LOOPCONT_VA)
     + bytes.fromhex("c3ff") + CMD5T_SAVE_VA.to_bytes(4, "little")
-    + bytes.fromhex("0160")                     # r1 = [r0+0]
-    + bytes.fromhex("3260")                     # r2 = [r3+0]
-    + bytes.fromhex("2919")                     # r1 ^= r2
-    + bytes.fromhex("0a62")                     # r2 = h[r0+4]
-    + bytes.fromhex("2919")                     # r1 ^= r2
-    + bytes.fromhex("3b62")                     # r3 = h[r3+4]
-    + bytes.fromhex("3919")                     # r1 ^= r3  (0 = same device)
-    + encode_branch2(_c + 0x20, _c + 4, neq=False, reg=1)   # -> KILL
-    + encode_goto32(_c + 0x22, CMD5T_LOOPCONT_VA)           # skip this slot
+                                                # r3 = 0x0001A5F1 (target ptr)
+    + bytes.fromhex("0616")                     # r6 = r0       (slot ptr)
+    + bytes.fromhex("4120")                     # r1 = 0        (XOR accumulator)
+    + bytes.fromhex("1085") + bytes.fromhex("6207")
+    + bytes.fromhex("2919")                     # rep 4 6 { r2 = b[r6++]; r1 ^= r2 }
+    + bytes.fromhex("1085") + bytes.fromhex("3207")
+    + bytes.fromhex("2919")                     # rep 4 6 { r2 = b[r3++]; r1 ^= r2 }
+    + encode_branch2(_c + 0x22, _c + 4, neq=False, reg=1)   # r1==0 -> KILL
+    + encode_goto32(_c + 0x24, CMD5T_LOOPCONT_VA)           # skip this slot
 )
-assert len(CMD5T_CAVE_BYTES) == 0x26
+assert len(CMD5T_CAVE_BYTES) == 0x28
 CMD5T_HOOK = encode_goto32(CMD5T_HOOK_VA, CMD5T_CAVE_VA)
 
 PRESST_HOOK_VA = 0x01E6ECDA                     # settings-press cmd-5 post
@@ -1588,6 +1596,310 @@ PRESST_CAVE_BYTES = (
 )
 assert len(PRESST_CAVE_BYTES) == 0x20
 PRESST_HOOK = encode_call(PRESST_HOOK_VA, PRESST_CAVE_VA)
+
+# --------------------------------------------------------------------------
+# D1 (--d1-target-wait, ch. 31 SS30 Q6 recipe, GO 2026-10-28; R1-e3 2026-10-31):
+# make FUN_01e600b4's two quiescence waits TARGET-SPECIFIC. Stock waits on the
+# GLOBAL controller-link check (0x01E17F26), which reads 0 for a STABLE link
+# (E6 calibration), so a repair press posts page cmd 1 while the target's own
+# conn record is still inuse -> the stack cmd-1 guard 0x01E16824 refuses it ->
+# silent "Connecting" hang (the R1-e/R1-e2 field failure: the async cmd-5 kill
+# only wins if the btstack task starts it within the ~15 ms dly window).
+# D1 replaces both checks with FUN_01e16824(r4) (target BD_ADDR ptr -> slot
+# ptr or 0, ignores handle): the page waits until the TARGET's record is gone,
+# which the cmd5-target kill (or stock mask kill) frees. Cave thunk VA moved
+# from the ch. 31 note (0x01EA7758) to 0x01EA77F0: 0x01EA7758 is the start of
+# the always-checked r1bcave state window (76 B, ends 0x01EA77A4); 0x01EA77F0
+# sits right after presstcave (ends 0x01EA77EF), ALLZERO + pointer-scan clean
+# in v44/v45/v50 (verified 2026-10-31).
+# --------------------------------------------------------------------------
+D1_PAGEFN_VA = 0x01E600B4                      # FUN_01e600b4 (r0 = BD_ADDR)
+D1_SLOTCHK_VA = 0x01E16824                     # slot-ptr-or-0 for BD_ADDR ptr
+D1_WAIT1_VA = 0x01E600DC                       # LOOP A check (10 B)
+D1_WAIT1_CTX = bytes.fromhex("bdea23bf051615f8f501")
+#   r0=r4; call 0x16824; r5=r0; if (r5 != 0) goto 0x600D0   (loop A)
+D1_WAIT1 = (bytes.fromhex("4016")
+            + encode_call(D1_WAIT1_VA + 2, D1_SLOTCHK_VA)
+            + bytes.fromhex("0516")
+            + encode_branch2(D1_WAIT1_VA + 8, 0x01E600D0, neq=True, reg=5))
+D1_WAIT2_VA = 0x01E6010E                       # LOOP B check (4 B call)
+D1_WAIT2_CTX = bytes.fromhex("bdea0abf")       # stock call 0x01E17F26
+D1_THUNK_CAVE_VA = 0x01EA77F0
+#   r0=r4; goto 0x16824   (tail call; r4 = BD_ADDR ptr, live in 0x600B4 frame)
+D1_THUNK_CAVE_BYTES = (bytes.fromhex("4016")
+                       + encode_goto32(D1_THUNK_CAVE_VA + 2, D1_SLOTCHK_VA))
+assert len(D1_WAIT1) == 10 and len(D1_THUNK_CAVE_BYTES) == 6
+D1_WAIT2 = encode_call(D1_WAIT2_VA, D1_THUNK_CAVE_VA)
+
+# --------------------------------------------------------------------------
+# --incoming-mode3  (ch. 30 §30.14.18-20, R3): force routing mode 3 when a
+# SECOND device is up while the routing byte is stuck at 1 (TID-PTT mode).
+# The name classifier (0x01E7EC28) runs only on the btstack remote-name result
+# (dispatcher FUN_01e19e44 case 7 @0x01E1A106); an INCOMING join (headset
+# paging the radio) never classifies, so the connect-complete mode-switch tbh
+# @0x01E61270 takes the mode-1 NO-OP exit (0x01E61778) -> no audio bind: the
+# field crippling (button mic on TX, RX silent everywhere; §30.14.17).
+# Hook: the 4-byte routing-byte load `50 ee 64 0d` (r0 = b[r6+212], r6=0xB390
+# -> RAM 0xB464) at 0x01E61270 becomes a call to a 54-byte cave. Cave: load
+# the byte; if != 1 return it (exact stock path). If == 1, test the two conn
+# records (0x1A5B8/0x1A5D4, inused = bit29 of the word @slot+0xF = byte
+# @slot+0x12 & 0x20 — byte-wise, misaligned word loads FAULT on pi32v2): iff
+# BOTH inused (goal state: SPP incumbent + incoming headset) write 0xB464 = 3
+# and return 3 -> tbh takes the mode-3 bind call 0x01E503CA(3) (P6-proven
+# healthy: BT mic TX + RX in earphones). Uses only r0 (return) and r1 (dead:
+# stock overwrites it at 0x01E61274). Accepted caveat: a second TID-MIC-class
+# device would also be forced to 3; the goal flow (§30.0: one SPP + one HFP)
+# makes the second device always the headset. Cave @0x01EA77F6: the free tail
+# of the 364 B ALLZERO run 0x01EA76DE..0x01EA7849 (earlier caves consume up to
+# 0x01EA77F5), ALLZERO in v44/v45/v50 + pointer-scan clean (2026-11-02),
+# sector 0xAC000. (An earlier design note claimed 0x01EA793A..0x01EA7D75 -
+# WRONG: that site holds f8 00/ff data; caught by the ctx-window check.)
+# Does NOT fix the once-per-boot incoming re-join limit (§30.14.20 P7).
+# --------------------------------------------------------------------------
+INCMODE3_HOOK_VA = 0x01E61270
+INCMODE3_HOOK_CTX = bytes.fromhex("50ee640d")   # r0 = b[r6+212] (u)
+INCMODE3_CAVE_VA = 0x01EA77F6
+INCMODE3_BYTE_VA = 0x0000B464                   # RAM routing byte (gp+0xD4)
+# conn-record inuse bytes: slot+0x12 (bit5 = bit29 of the slot+0xF word)
+INCMODE3_SLOT0_INUSE = 0x0001A5CA               # 0x1A5B8 + 0x12
+INCMODE3_SLOT1_INUSE = 0x0001A5E6               # 0x1A5D4 + 0x12
+_c = INCMODE3_CAVE_VA
+INCMODE3_CAVE_BYTES = (
+    bytes.fromhex("50ee640d")                   # +0  r0 = b[r6+212]
+    + bytes.fromhex("31e1ff0f")                 # +4  r1 = r0 + -1
+    + encode_branch2(_c + 8, _c + 48, neq=True, reg=1)   # +8  byte != 1 -> rts
+    + bytes.fromhex("c1ff") + INCMODE3_SLOT0_INUSE.to_bytes(4, "little")
+    + bytes.fromhex("50ee1000")                 # +16 r0 = b[r1+0]
+    + bytes.fromhex("60e12000")                 # +20 r0 = r0 & 0x20
+    + encode_branch2(_c + 24, _c + 50, neq=False, reg=0)  # +24 free -> RET1
+    + bytes.fromhex("c1ff") + INCMODE3_SLOT1_INUSE.to_bytes(4, "little")
+    + bytes.fromhex("50ee1000")                 # +32 r0 = b[r1+0]
+    + bytes.fromhex("60e12000")                 # +36 r0 = r0 & 0x20
+    + encode_branch2(_c + 40, _c + 50, neq=False, reg=0)  # +40 free -> RET1
+    + bytes.fromhex("4023")                     # +42 r0 = 3
+    + bytes.fromhex("52ee640d")                 # +44 b[r6+212] = r0
+    + bytes.fromhex("8000")                     # +48 rts
+    + bytes.fromhex("4021")                     # +50 r0 = 1
+    + bytes.fromhex("8000")                     # +52 rts
+)
+assert len(INCMODE3_CAVE_BYTES) == 54
+INCMODE3_HOOK = encode_call(INCMODE3_HOOK_VA, INCMODE3_CAVE_VA)
+
+# --------------------------------------------------------------------------
+# --incoming-hfp  (ch. 30 §30.14.26, R4): give the INCOMING second device
+# its profiles. The radio only brings up HFP/SCO when it DIALS OUT: the page
+# fn FUN_01e600b4 ends with user_send_cmd_prepare(1, 6, addr) =
+# USER_CTRL_START_CONNEC_VIA_ADDR @0x01E60114 (P6/E6 audio rides on it).
+# An incoming join (headset paging the radio) never posts cmd 1 -> no
+# profile links -> the §30.14.17/23 crippling (R3 proved forcing the routing
+# byte binds nothing because there is no SCO to bind). R4 replays the post:
+# hook the SAME proven-safe tbh entry 0x01E61270 (R3 ran it every join with
+# no freeze), and when the routing byte == 1 AND both conn records are
+# inused, post cmd 1 for the JOINING device, then return the byte UNCHANGED
+# (stock mode-1 arm continues; the far path 0x61D7C, which posts the
+# disconnect cmds 5/74, is never reached). The joining 6-byte BD_ADDR
+# pointer is the caller's [sp+16] (the mode-3 arm's own source, same frame,
+# no pushes between) = [sp+20] inside the cave (32-bit call pushes rets).
+# The cmd-1 handler bails when is_1t2_connection() is true (0x01E17A2A),
+# which is exactly our 2-links/conn-num=2 case -> NOP that branch too.
+INCHFP_HOOK_VA = 0x01E61270
+INCHFP_HOOK_CTX = bytes.fromhex("50ee640d")       # r0 = b[r6+212] (u)
+INCHFP_CAVE_VA = 0x01EA77F6
+INCHFP_USP_VA = 0x01E1792E                        # user_send_cmd_prepare
+INCHFP_BAIL_VA = 0x01E17A2A                       # if (r0 != 0) goto exit
+INCHFP_BAIL_CTX = bytes.fromhex("80f8cb00")
+INCHFP_SLOT0_INUSE = 0x0001A5CA                   # 0x1A5B8 + 0x12
+INCHFP_SLOT1_INUSE = 0x0001A5E6                   # 0x1A5D4 + 0x12
+_c = INCHFP_CAVE_VA
+INCHFP_RET = _c + 52
+INCHFP_CAVE_BYTES = (
+    bytes.fromhex("50ee640d")                     # +0  r0 = b[r6+212]
+    + bytes.fromhex("31e1ff0f")                   # +4  r1 = r0 + -1
+    + encode_branch2(_c + 8, INCHFP_RET, neq=True, reg=1)
+                                                  # +8  if (r1 != 0) goto RET
+    + bytes.fromhex("c1ff") + INCHFP_SLOT0_INUSE.to_bytes(4, "little")
+                                                  # +10 r1 = 0x1A5CA
+    + bytes.fromhex("50ee1000")                   # +16 r0 = b[r1+0] (u)
+    + bytes.fromhex("60e12000")                   # +20 r0 = r0 & 0x20
+    + encode_branch2(_c + 24, INCHFP_RET, neq=False, reg=0)
+                                                  # +24 if (r0 == 0) goto RET
+    + bytes.fromhex("c1ff") + INCHFP_SLOT1_INUSE.to_bytes(4, "little")
+                                                  # +26 r1 = 0x1A5E6
+    + bytes.fromhex("50ee1000")                   # +32 r0 = b[r1+0] (u)
+    + bytes.fromhex("60e12000")                   # +36 r0 = r0 & 0x20
+    + encode_branch2(_c + 40, INCHFP_RET, neq=False, reg=0)
+                                                  # +40 if (r0 == 0) goto RET
+    + bytes.fromhex("0225")                       # +42 r2 = [sp+20] (addr ptr)
+    + bytes.fromhex("4021")                       # +44 r0 = 1 (START_CONNEC_VIA_ADDR)
+    + bytes.fromhex("4126")                       # +46 r1 = 6 (BD_ADDR len)
+    + encode_call(_c + 48, INCHFP_USP_VA)         # +48 user_send_cmd_prepare(1,6,addr)
+    + bytes.fromhex("50ee640d")                   # +52 RET: r0 = b[r6+212]
+    + bytes.fromhex("8000")                       # +56 rts (byte UNCHANGED)
+)
+assert len(INCHFP_CAVE_BYTES) == 58
+INCHFP_HOOK = encode_call(INCHFP_HOOK_VA, INCHFP_CAVE_VA)
+
+# --incoming-redial  (ch. 30 SS30.14.29-31, R5): make the radio DIAL the
+# INCOMING second device so its profiles come up. R4 proved posting cmd 1
+# for an already-connected ACL no-ops at the same-address page guard
+# 0x01E16824 (cmd 1 is a DIAL command), and R3 proved forcing the routing
+# byte binds nothing when no SCO exists to bind. So R5 turns the incoming
+# join into an outgoing dial: hook the SAME proven-safe tbh entry
+# 0x01E61270 (R3/R4 ran it every connect-complete, no freeze), and when
+# the routing byte == 1 AND both conn records are inused (the two-device
+# state, SS30.14.17), (1) arm the stack's re-dial mailbox 0x0001A5F1 with
+# the joining 6-byte BD_ADDR (byte-wise copy - the cell is ODD, misaligned
+# multi-byte accesses FAULT, the R1-e lesson), then (2) HCI-Disconnect the
+# joiner's ACL (find-conn 0x01E17420 mode 0 -> 0x01E07B08(handle, 0x13)).
+# The btstack dispatcher's event-0 epilogue 0x01E2232E OR-folds the armed
+# mailbox and re-posts cmd 1 through 0x01E21E46 -> a RADIO-ORIGINATED dial
+# of that address, the one flow that brings up HFP/SCO (E6/P6-proven).
+# The mailbox STAYS armed: stock power-on reconnect then picks the same
+# device (an incidental P7 fix), and the teardown sentinel (0xF0 write
+# @0x01E61C88) reaching the tbh with mailbox == that address takes the
+# DONE arm: byte := 3 (mode-3 local mic/speaker enablers, SS30.14.24).
+# Loop guard: if the mailbox already holds the joining address the join is
+# left alone (byte unchanged, no kick) - no kick/redial cycle can form.
+# At redial time only 1 link is up (< conn_num 2) so is_1t2_connection()
+# is false and the cmd-1 handler passes naturally: unlike R4, NO bail NOP.
+# The 174-byte cave sits at 0x01EA7722 (212 B ALLZERO run, pointer-scan
+# clean, verified in v44/v45/v50 + E7-ref) and ends EXACTLY at 0x01EA77D0,
+# the end of the legacy cmd5tcave window (= presstcave start): presstcave/
+# d1thunk/incmode3cave stay untouched. Mutually exclusive with
+# --incoming-mode3/--incoming-hfp (same hook) and with --gate-close/
+# --r1-conditional-kill/--r1-walker-kill/--cmd5-target (this cave window).
+# Objdump round-trip verified 2026-11-03.
+INCHRDL_HOOK_VA = 0x01E61270
+INCHRDL_HOOK_CTX = bytes.fromhex("50ee640d")       # r0 = b[r6+212] (u)
+INCHRDL_CAVE_VA = 0x01EA7722
+INCHRDL_MB = 0x0001A5F1                            # re-dial mailbox (ODD!)
+INCHRDL_FIND_VA = 0x01E17420                       # find-conn(mode, addr)
+INCHRDL_KDISC_VA = 0x01E07B08                      # disconnect(handle, reason)
+INCHRDL_CAVE_BYTES = bytes.fromhex(
+    "50ee640d00f80d0210f803e050ee640d8000022580ea2c00f059402352ee640d"
+    "8000c1ffcaa5010050ee100060e12000704dc1ffe6a5010050ee100060e12000"
+    "7045022580ea14007041c0fff1a50100012510851207820700254120bbea4f7e"
+    "6055c1ff13000000bbeabd0140218000c1fff1a5010010072307381980561007"
+    "230738198052100723073819804e100723073819804a10072307381980461007"
+    "2307381980424020800040218000")
+# +0   50 ee 64 0d        r0 = b[r6+212]              (routing byte)
+# +4   00 f8 0d 02        if (r0 == 1)   goto ARM (+34)
+# +8   10 f8 03 e0        if (r0 == 240) goto DONE (+18)
+# +12  50 ee 64 0d 80 00  RET: r0 = b[r6+212]; rts    (byte unchanged)
+# +18  02 25              DONE: r2 = [sp+20]          (joining BD_ADDR ptr)
+#      80 ea 2c 00         call CMP6 (+112)
+#      f0 59               if (r0 != 0) goto RET       (mailbox != addr)
+#      40 23 52 ee 64 0d   r0 = 3; b[r6+212] = r0     (teardown -> mode 3)
+#      80 00               rts
+# +34  c1 ff ca a5 01 00  ARM: r1 = 0x1A5CA            (slot 0 inused byte)
+#      50 ee 10 00         r0 = b[r1+0] (u)
+#      60 e1 20 00         r0 = r0 & 0x20             (bit29 = inused)
+#      70 4d               if (r0 == 0) goto RET      (slot 0 free)
+#      c1 ff e6 a5 01 00  r1 = 0x1A5E6                (slot 1 inused byte)
+#      50 ee 10 00         r0 = b[r1+0] (u)
+#      60 e1 20 00         r0 = r0 & 0x20
+#      70 45               if (r0 == 0) goto RET      (slot 1 free)
+#      02 25              r2 = [sp+20]
+#      80 ea 14 00         call CMP6
+#      70 41               if (r0 == 0) goto RET      LOOP GUARD: armed = addr
+#      c0 ff f1 a5 01 00  r0 = 0x1A5F1                (mailbox dst)
+#      01 25              r1 = [sp+20]                (addr src)
+#      10 85              rep 4 6 {                   copy 6 bytes
+#        12 07              r2 = b[r1++=1] (u)
+#        82 07              b[r0++=1] = r2 }
+#      00 25              r0 = [sp+20]
+#      41 20              r1 = 0                      (find-conn mode 0)
+#      bb ea 4f 7e         call 0x01E17420            (find-conn)
+#      60 55               if (r0 == 0) goto RET      (no conn record)
+#      c1 ff 13 00 00 00  r1 = 0x13                   (r0 = handle, zero-ext)
+#      bb ea bd 01         call 0x01E07B08            (HCI Disconnect)
+#      40 21 80 00         r0 = 1; rts                (byte == 1 on ARM path)
+# +112 c1 ff f1 a5 01 00  CMP6: r1 = 0x1A5F1
+#      6x { 10 07           r0 = b[r1++=1] (u)
+#           23 07           r3 = b[r2++=1] (u)
+#           38 19           r0 ^= r3
+#           80 5x           if (r0 != 0) goto NE (+170) }
+#      40 20 80 00         r0 = 0; rts                (all 6 equal)
+# +170 40 21 80 00         NE:  r0 = 1; rts
+assert len(INCHRDL_CAVE_BYTES) == 174
+INCHRDL_HOOK = encode_call(INCHRDL_HOOK_VA, INCHRDL_CAVE_VA)
+
+# --redial-bind  (ch. 30 SS30.14.34-35, R6a): R5's loop guard (byte == 1 &&
+# mailbox == joiner at connect-complete = OUR redial just landed, profiles
+# up) returned with the routing byte UNCHANGED, so the app stayed in mode 1
+# bound to the SPP incumbent (SS30.14.34 verdict: chain sound, wall = app
+# binding). R6a retargets that one branch from RET (+12) to DONE (+18):
+# DONE re-runs CMP6 on the same inputs (returns 0) and stamps byte := 3 -
+# mode 3 with a live HFP link, unlike R3 which stamped with no profiles.
+# 2-byte short branch: target = pc + (byte1 - 95) * 2; +73: 0x41 (RET) ->
+# 0x44 (DONE). Everything else byte-identical to R5.
+INCHRDL_BIND_OFF = 73
+INCHRDL_CAVE_BYTES_BIND = (INCHRDL_CAVE_BYTES[:INCHRDL_BIND_OFF]
+                           + b"\x44"
+                           + INCHRDL_CAVE_BYTES[INCHRDL_BIND_OFF + 1:])
+assert len(INCHRDL_CAVE_BYTES_BIND) == 174
+assert INCHRDL_CAVE_BYTES_BIND[72] == 0x70 and INCHRDL_BIND_OFF == 73
+
+# --redial-current  (ch. 30 SS30.14.37, R6b): R6a stamped routing byte 3 at
+# OUR redial's connect-complete and audio still never bound - mode-3 tbh is
+# an enable/state path; the real bind (app event 0xB -> block 0x61292) asks
+# the STACK current-device record via is_current_device() 0x01E184D6 (valid
+# = bit14 of dword 0xBF39, BD_ADDR = 0xBF41..46), which only a radio-
+# originated dial fills. R6b retargets the same loop-guard branch to a new
+# 90-byte window right after the cave (0x01EA77D0, ends 0x01EA782A inside
+# the 364 B run): zero the re-dial mailbox 0x1A5F1..F6 (fixes the R6a S5
+# repair-press regression + releases the P7 stuck record), copy the joiner
+# [sp+20] -> 0xBF41..46 byte-wise, set b[0xBF3A] |= 0x40, then post
+# user_send_cmd_prepare(6 = READ_REMOTE_NAME, 6, [sp+20]) -> HCI name result
+# -> btstack dispatcher 0x01E19E5E tbh event 5 -> 0x1A106 -> ops[0xBF48+4] =
+# classifier 0x01E7EC28, which UNCONDITIONALLY self-stamps b[0xB464] := 3
+# (Jabra = default name match). Routing byte stays untouched at the tbh.
+# Guard branch (2-byte, site cave +72 = 0x01EA776A): RET(+12) -> CUR entry
+# (0x01EA77D0): 0x70 0x41 -> 0x10 0x52 (encode_branch2 verified, fits).
+INCHRDL_CUR_CAVE_VA = INCHRDL_CAVE_VA + 174            # 0x01EA77D0
+INCHRDL_CUR_BYTES = bytes.fromhex(
+    "0225c0fff1a501004120810781078107810781078107c0ff41bf000023078307"
+    "2307830723078307230783072307830723078307c1ff3abf000050ee1000c2ff"
+    "40000000201952ee1000402641260225bbea858050ee640d8000")
+assert len(INCHRDL_CUR_BYTES) == 90
+assert decode_call(INCHRDL_CUR_CAVE_VA + 80, INCHRDL_CUR_BYTES[80:84]) \
+    == 0x01E1792E                      # dispatcher post (cmd 6, 6, [sp+20])
+assert INCHRDL_CUR_BYTES[-6:] == b"\x50\xee\x64\x0d\x80\x00"  # r0=b[r6+212]; rts
+INCHRDL_GUARD_CUR = encode_branch2(INCHRDL_CAVE_VA + 72, INCHRDL_CUR_CAVE_VA,
+                                   neq=False)
+assert INCHRDL_GUARD_CUR == b"\x10\x52"
+INCHRDL_CAVE_BYTES_CUR = (INCHRDL_CAVE_BYTES[:72] + INCHRDL_GUARD_CUR
+                          + INCHRDL_CAVE_BYTES[74:])
+assert len(INCHRDL_CAVE_BYTES_CUR) == 174
+assert INCHRDL_CAVE_BYTES_CUR[72:74] == b"\x10\x52"
+
+# --redial-bind2  (ch. 30 SS30.14.41, R7): R6b's name-replay never bound
+# audio (S1c/S1d goal-miss, plus an S4 menu-Connect freeze the replay is the
+# prime suspect for). Phase A decoded the real bind: bt-task loop FUN_01e60e44
+# event 0xB -> block 0x01E61292 (b[0xB4FA]:=120, 6-byte copy [sp+16]->[sp+12],
+# free [0x102F0+0x280], is_current_device([sp+12]) gate, b[0x10E00]&1 gate,
+# state |=5, FUN_01e07ff6(3), 500 ms timer, post stack cmd 0x1E). The event
+# poster lives in the precompiled btstack, so R7 JUMPS INTO THE BIND BLOCK
+# directly: same guard branch (10 52) into the same 0x01EA77D0 window, whose
+# first 74 bytes are R6b's (zero mailbox 0x1A5F1, joiner -> 0xBF41..46,
+# b[0xBF3A] |= 0x40 = the current-device record the bind gate demands), then
+# stamp routing byte b[0xB464] := 3 (mode-3 enablers = what a classified
+# Jabra dials in with), synthesize the payload pointers [sp+12] = [sp+16] =
+# joiner addr (self-copy src==dst harmless) and `goto 0x01E61292` — the stock
+# bind runs synchronously in the bt-task loop, r6 = 0xB390 still live. The
+# cmd-6 READ_REMOTE_NAME replay is DROPPED. 90 B, ends 0x01EA782A.
+INCHRDL_BIND2_BYTES = bytes.fromhex(
+    "0225c0fff1a501004120810781078107810781078107c0ff41bf000023078307"
+    "2307830723078307230783072307830723078307c1ff3abf000050ee1000c2ff"
+    "40000000201952ee1000412352ee641d022582238224fdea34cd")
+assert len(INCHRDL_BIND2_BYTES) == 90
+assert INCHRDL_BIND2_BYTES[:74] == INCHRDL_CUR_BYTES[:74]
+assert INCHRDL_BIND2_BYTES[74:80] == b"\x41\x23\x52\xee\x64\x1d"  # r1=3; b[r6+212]=r1
+assert INCHRDL_BIND2_BYTES[80:86] == b"\x02\x25\x82\x23\x82\x24"  # r2=[sp+20]; [sp+12]=r2; [sp+16]=r2
+_g2 = INCHRDL_BIND2_BYTES[86:90]
+assert _g2[0] & 0xC0 == 0xC0 and _g2[1] == 0xEA  # goto32 shape
+assert decode_call(INCHRDL_CUR_CAVE_VA + 86,
+                   bytes([_g2[0] & ~0x40]) + _g2[1:]) == 0x01E61292
 
 # The cmd5target hook overwrites the low half of the cmd5handle site, so
 # teach that state table (and thus find_app_start/--show) about it.
@@ -1841,7 +2153,10 @@ def build_patches(duplex_mode=4, ptt2_action="PTT2", odptt_action="OD-PTT",
                   no_l2cap_disconnect=False, gate_close=False,
                   no_cmd5_kill=False, r1_conditional_kill=False,
                   r1_walker_kill=False, cmd5_handle=False,
-                  cmd5_target=False):
+                  cmd5_target=False, d1_target_wait=False,
+                  incoming_mode3=False, incoming_hfp=False,
+                  incoming_redial=False, redial_bind=False,
+                  redial_current=False, redial_bind2=False):
     """Return the patch table, with the `duplex` patch's target selected by
     `duplex_mode` (see DUPLEX_LABELS) and the `pflabels` multi-patch built
     for the (--PTT2, --OD-PTT) action pair (see PF_COMBO_PATCHES). The
@@ -2163,6 +2478,306 @@ def build_patches(duplex_mode=4, ptt2_action="PTT2", odptt_action="OD-PTT",
         "ctx_variant": _ctx_variant_fn(PRESST_CAVE_VA, PRESST_CAVE_VA,
                                        b"\x00" * len(PRESST_CAVE_BYTES)),
     }
+    d1 = "target" if d1_target_wait else "stock"
+    patches["d1wait1"] = {
+        "desc": "page-fn FUN_01e600b4 LOOP A check (0x01E600DC) -> %s" % d1,
+        "va": D1_WAIT1_VA,
+        "new": D1_WAIT1 if d1_target_wait else D1_WAIT1_CTX,
+        "states": {"stock": D1_WAIT1_CTX, "d1wait1": D1_WAIT1},
+        "labels": {"stock": "r5 = call 0x17F26 (GLOBAL link check); "
+                            "if (r5 == 128) loop",
+                   "d1wait1": "r0=r4; call 0x16824; r5=r0; "
+                              "if (r5 != 0) loop (TARGET-record wait)"},
+        "target": "d1wait1" if d1_target_wait else "stock",
+        "ctx_va": D1_WAIT1_VA,
+        "ctx_base": D1_WAIT1_CTX,
+        "ctx_variant": _ctx_variant_fn(D1_WAIT1_VA, D1_WAIT1_VA,
+                                       D1_WAIT1_CTX),
+    }
+    patches["d1wait2"] = {
+        "desc": "page-fn FUN_01e600b4 LOOP B call (0x01E6010E) -> %s" % d1,
+        "va": D1_WAIT2_VA,
+        "new": D1_WAIT2 if d1_target_wait else D1_WAIT2_CTX,
+        "states": {"stock": D1_WAIT2_CTX, "d1wait2": D1_WAIT2},
+        "labels": {"stock": "call 0x17F26 (GLOBAL link check)",
+                   "d1wait2": "call cave 0x%08X (r0=r4; goto 0x16824)"
+                              % D1_THUNK_CAVE_VA},
+        "target": "d1wait2" if d1_target_wait else "stock",
+        "ctx_va": D1_WAIT2_VA,
+        "ctx_base": D1_WAIT2_CTX,
+        "ctx_variant": _ctx_variant_fn(D1_WAIT2_VA, D1_WAIT2_VA,
+                                       D1_WAIT2_CTX),
+    }
+    patches["d1thunk"] = {
+        "desc": "code cave @0x%08X: D1 slot-check thunk" % D1_THUNK_CAVE_VA,
+        "va": D1_THUNK_CAVE_VA,
+        "new": D1_THUNK_CAVE_BYTES if d1_target_wait
+               else b"\x00" * len(D1_THUNK_CAVE_BYTES),
+        "states": {"native": b"\x00" * len(D1_THUNK_CAVE_BYTES),
+                   "d1thunk": D1_THUNK_CAVE_BYTES},
+        "labels": {"native": "erased (all zero)",
+                   "d1thunk": "r0 = r4; goto 0x01E16824 (tail call)"},
+        "target": "d1thunk" if d1_target_wait else "native",
+        "ctx_va": D1_THUNK_CAVE_VA,
+        "ctx_base": b"\x00" * len(D1_THUNK_CAVE_BYTES),
+        "ctx_variant": _ctx_variant_fn(D1_THUNK_CAVE_VA, D1_THUNK_CAVE_VA,
+                                       b"\x00" * len(D1_THUNK_CAVE_BYTES)),
+    }
+    im = "forced" if incoming_mode3 else "stock"
+    patches["incmode3"] = {
+        "desc": "connect-complete mode-switch tbh byte load (0x01E61270) "
+                "-> %s" % im,
+        "va": INCMODE3_HOOK_VA,
+        "new": INCMODE3_HOOK if incoming_mode3 else INCMODE3_HOOK_CTX,
+        "states": {"stock": INCMODE3_HOOK_CTX, "incmode3": INCMODE3_HOOK},
+        "labels": {"stock": "r0 = b[r6+212] (routing byte, stock)",
+                   "incmode3": "call cave 0x%08X (byte==1 && 2 conn records "
+                               "inused -> byte:=3)" % INCMODE3_CAVE_VA},
+        "target": "incmode3" if incoming_mode3 else "stock",
+        "ctx_va": INCMODE3_HOOK_VA,
+        "ctx_base": INCMODE3_HOOK_CTX,
+        "ctx_variant": _ctx_variant_fn(INCMODE3_HOOK_VA, INCMODE3_HOOK_VA,
+                                       INCMODE3_HOOK_CTX),
+    }
+    patches["incmode3cave"] = {
+        "desc": "code cave @0x%08X: R3 incoming-mode3 predicate"
+                % INCMODE3_CAVE_VA,
+        "va": INCMODE3_CAVE_VA,
+        "new": INCMODE3_CAVE_BYTES if incoming_mode3
+               else b"\x00" * len(INCMODE3_CAVE_BYTES),
+        "states": {"native": b"\x00" * len(INCMODE3_CAVE_BYTES),
+                   "incmode3cave": INCMODE3_CAVE_BYTES,
+                   # recognition only: the mutually exclusive R4 cave shares
+                   # this window (same hook too) - never a target here.
+                   # Truncated to this site's 54-byte width; the R4 cave's
+                   # tail (55..58) lives in never-inspected zeros.
+                   "inchfpcave": INCHFP_CAVE_BYTES[:len(INCMODE3_CAVE_BYTES)]},
+        "labels": {"native": "erased (all zero)",
+                   "incmode3cave": "rout==1 && both conn records inused "
+                                   "-> 0xB464 = 3",
+                   "inchfpcave": "R4 --incoming-hfp cave occupies this "
+                                 "window (mutually exclusive)"},
+        "target": "incmode3cave" if incoming_mode3 else "native",
+        "ctx_va": INCMODE3_CAVE_VA,
+        "ctx_base": b"\x00" * len(INCMODE3_CAVE_BYTES),
+        "ctx_variant": _ctx_variant_fn(INCMODE3_CAVE_VA, INCMODE3_CAVE_VA,
+                                       b"\x00" * len(INCMODE3_CAVE_BYTES)),
+    }
+    ih = "enabled" if incoming_hfp else "stock"
+    patches["inchfp"] = {
+        "desc": "connect-complete mode-switch tbh byte load (0x01E61270) "
+                "-> %s" % ih,
+        "va": INCHFP_HOOK_VA,
+        "new": INCHFP_HOOK if incoming_hfp else INCHFP_HOOK_CTX,
+        "states": {"stock": INCHFP_HOOK_CTX, "inchfp": INCHFP_HOOK},
+        "labels": {"stock": "r0 = b[r6+212] (routing byte, stock)",
+                   "inchfp": "call cave 0x%08X (byte==1 && 2 conn records "
+                             "inused -> post cmd 1 for joiner)" % INCHFP_CAVE_VA},
+        "target": "inchfp" if incoming_hfp else "stock",
+        "ctx_va": INCHFP_HOOK_VA,
+        "ctx_base": INCHFP_HOOK_CTX,
+        "ctx_variant": _ctx_variant_fn(INCHFP_HOOK_VA, INCHFP_HOOK_VA,
+                                       INCHFP_HOOK_CTX),
+    }
+    patches["inchfpcave"] = {
+        "desc": "code cave @0x%08X: R4 incoming-HFP post"
+                % INCHFP_CAVE_VA,
+        "va": INCHFP_CAVE_VA,
+        "new": INCHFP_CAVE_BYTES if incoming_hfp
+               else b"\x00" * len(INCHFP_CAVE_BYTES),
+        "states": {"native": b"\x00" * len(INCHFP_CAVE_BYTES),
+                   "inchfpcave": INCHFP_CAVE_BYTES,
+                   # recognition only: the mutually exclusive R3 cave shares
+                   # this window (same hook too) - never a target here.
+                   # Padded to this site's 58-byte width: the R3 cave leaves
+                   # +54..+58 erased.
+                   "incmode3cave": INCMODE3_CAVE_BYTES
+                                   + b"\x00" * (len(INCHFP_CAVE_BYTES)
+                                                - len(INCMODE3_CAVE_BYTES))},
+        "labels": {"native": "erased (all zero)",
+                   "inchfpcave": "rout==1 && both conn records inused -> "
+                                 "user_send_cmd_prepare(1, 6, [sp+20])",
+                   "incmode3cave": "R3 --incoming-mode3 cave occupies this "
+                                   "window (mutually exclusive)"},
+        "target": "inchfpcave" if incoming_hfp else "native",
+        "ctx_va": INCHFP_CAVE_VA,
+        "ctx_base": b"\x00" * len(INCHFP_CAVE_BYTES),
+        "ctx_variant": _ctx_variant_fn(INCHFP_CAVE_VA, INCHFP_CAVE_VA,
+                                       b"\x00" * len(INCHFP_CAVE_BYTES)),
+    }
+    patches["inchfpbail"] = {
+        "desc": "cmd-1 handler is_1t2_connection bail (0x01E17A2A) -> %s" % ih,
+        "va": INCHFP_BAIL_VA,
+        "new": b"\x00" * 4 if incoming_hfp else INCHFP_BAIL_CTX,
+        "states": {"stock": INCHFP_BAIL_CTX, "inchfpbail": b"\x00" * 4},
+        "labels": {"stock": "if (r0 != 0) goto exit (bail at 2 links)",
+                   "inchfpbail": "nop x4 (cmd 1 works with 2 links up)"},
+        "target": "inchfpbail" if incoming_hfp else "stock",
+        "ctx_va": INCHFP_BAIL_VA,
+        "ctx_base": INCHFP_BAIL_CTX,
+        "ctx_variant": _ctx_variant_fn(INCHFP_BAIL_VA, INCHFP_BAIL_VA,
+                                       INCHFP_BAIL_CTX),
+    }
+    ird = "redial" if incoming_redial else "stock"
+    patches["inchrdl"] = {
+        "desc": "connect-complete mode-switch tbh byte load (0x01E61270) "
+                "-> %s" % ird,
+        "va": INCHRDL_HOOK_VA,
+        "new": INCHRDL_HOOK if incoming_redial else INCHRDL_HOOK_CTX,
+        "states": {"stock": INCHRDL_HOOK_CTX, "inchrdl": INCHRDL_HOOK,
+                   # recognition only: the mutually exclusive R3/R4 hook
+                   # shares this site (same tbh entry, identical bytes).
+                   "incmode3": INCHFP_HOOK},
+        "labels": {"stock": "r0 = b[r6+212] (routing byte, stock)",
+                   "inchrdl": "call cave 0x%08X (byte==1 && 2 conn records "
+                               "inused -> arm re-dial mailbox + kick "
+                               "joiner; teardown+mailbox match -> byte:=3)"
+                               % INCHRDL_CAVE_VA,
+                   "incmode3": "R3/R4 --incoming-mode3/-hfp hook at this "
+                               "site (mutually exclusive)"},
+        "target": "inchrdl" if incoming_redial else "stock",
+        "ctx_va": INCHRDL_HOOK_VA,
+        "ctx_base": INCHRDL_HOOK_CTX,
+        "ctx_variant": _ctx_variant_fn(INCHRDL_HOOK_VA, INCHRDL_HOOK_VA,
+                                       INCHRDL_HOOK_CTX),
+    }
+    _ird_w = len(INCHRDL_CAVE_BYTES)
+    _ird_cur = bool(incoming_redial and redial_current)
+    _ird_bind2 = bool(incoming_redial and redial_bind2)
+    if _ird_bind2:
+        _ird_cur = False
+    _ird_bind = bool(incoming_redial and redial_bind and not _ird_cur
+                     and not _ird_bind2)
+    _ird_new = (INCHRDL_CAVE_BYTES_CUR if (_ird_cur or _ird_bind2)
+                else INCHRDL_CAVE_BYTES_BIND if _ird_bind
+                else INCHRDL_CAVE_BYTES if incoming_redial
+                else b"\x00" * _ird_w)
+    _ird_state = ("inchrdlcur" if (_ird_cur or _ird_bind2)
+                  else "inchrdlbind" if _ird_bind
+                  else "inchrdlcave" if incoming_redial else "native")
+    patches["inchrdlcave"] = {
+        "desc": "code cave @0x%08X: R5 incoming kick+redial%s"
+                % (INCHRDL_CAVE_VA,
+                   " (R7 bind2)" if _ird_bind2
+                   else " (R6b current)" if _ird_cur
+                   else " (R6a bind)" if _ird_bind else ""),
+        "va": INCHRDL_CAVE_VA,
+        "new": _ird_new,
+        "states": {"native": b"\x00" * _ird_w,
+                   "inchrdlcave": INCHRDL_CAVE_BYTES,
+                   # recognition only (static): the R6a --redial-bind
+                   # variant differs from R5 at one branch byte.
+                   "inchrdlbind": INCHRDL_CAVE_BYTES_BIND,
+                   # recognition only (static): R6b --redial-current
+                   # retargets the guard branch to the CUR window.
+                   "inchrdlcur": INCHRDL_CAVE_BYTES_CUR},
+        "labels": {"native": "erased (all zero)",
+                   "inchrdlcave": "rout==1 && 2 recs inused -> arm 0x1A5F1="
+                                  "joiner, kick its ACL; 0xF0 && match -> 3",
+                   "inchrdlbind": "R5 cave + R6a: loop-guard (mailbox=="
+                                  "joiner) stamps byte:=3 (bind at redial "
+                                  "connect-complete)",
+                   "inchrdlcur": "R5 cave + R6b: loop-guard branches to CUR "
+                                 "@0x01EA77D0 (current-device + name replay)"},
+        "target": _ird_state,
+        "ctx_va": INCHRDL_CAVE_VA,
+        "ctx_base": b"\x00" * _ird_w,
+        "ctx_variant": _ctx_variant_fn(INCHRDL_CAVE_VA, INCHRDL_CAVE_VA,
+                                       b"\x00" * _ird_w),
+    }
+    # R6b --redial-current CUR window (ch. 30 SS30.14.37): 90 B right after
+    # the R5 cave. Legacy occupants of THIS window (all mutually exclusive
+    # with --redial-current: --cmd5-target's presstcave/d1thunk, R3's and
+    # R4's caves) are taught as recognition-only states, and the legacy
+    # sites learn the CUR payload below the teaching loop.
+    _ic_w = len(INCHRDL_CUR_BYTES)
+    _ic_off_p = PRESST_CAVE_VA - INCHRDL_CUR_CAVE_VA            # 0
+    _ic_off_d = D1_THUNK_CAVE_VA - INCHRDL_CUR_CAVE_VA          # 32
+    _ic_off_m = INCMODE3_CAVE_VA - INCHRDL_CUR_CAVE_VA          # 38
+    def _ic_win(payload, off):
+        w = bytearray(_ic_w)
+        n = min(len(payload), _ic_w - off)   # window-clamped (R3/R4 tails
+        w[off:off + n] = payload[:n]         # live in never-inspected zeros)
+        return bytes(w)
+    patches["inchrdlcurcave"] = {
+        "desc": "code cave @0x%08X: R6b current-device + name replay / R7"
+                " direct bind" % INCHRDL_CUR_CAVE_VA,
+        "va": INCHRDL_CUR_CAVE_VA,
+        "new": (INCHRDL_BIND2_BYTES if _ird_bind2
+                else INCHRDL_CUR_BYTES if _ird_cur else b"\x00" * _ic_w),
+        "states": {"native": b"\x00" * _ic_w,
+                   "inchrdlcur": INCHRDL_CUR_BYTES,
+                   "inchrdlbind2": INCHRDL_BIND2_BYTES,
+                   "legacy_presst": _ic_win(PRESST_CAVE_BYTES, _ic_off_p),
+                   "legacy_d1": _ic_win(D1_THUNK_CAVE_BYTES, _ic_off_d),
+                   "legacy_presst_d1": _ic_win(
+                       PRESST_CAVE_BYTES + D1_THUNK_CAVE_BYTES, _ic_off_p),
+                   "legacy_incmode3": _ic_win(INCMODE3_CAVE_BYTES, _ic_off_m),
+                   "legacy_inchfp": _ic_win(INCHFP_CAVE_BYTES, _ic_off_m)},
+        "labels": {"native": "erased (all zero)",
+                   "inchrdlcur": "guard hit: zero 0x1A5F1, 0xBF41..46=joiner,"
+                                 " b[0xBF3A]|=0x40, post cmd 6 (name ->"
+                                 " classifier stamps byte)",
+                   "inchrdlbind2": "guard hit: zero 0x1A5F1, 0xBF41..46=joiner,"
+                                   " b[0xBF3A]|=0x40, byte:=3, goto bind block"
+                                   " 0x01E61292 (R7)",
+                   "legacy_presst": "R1-e presstcave occupies this window "
+                                    "(mutually exclusive)",
+                   "legacy_d1": "D1 slot-check thunk occupies this window "
+                                "(mutually exclusive)",
+                   "legacy_presst_d1": "R1-e presstcave + D1 thunk occupy "
+                                       "this window (mutually exclusive)",
+                   "legacy_incmode3": "R3 incmode3cave occupies this window "
+                                      "(mutually exclusive)",
+                   "legacy_inchfp": "R4 inchfpcave occupies this window "
+                                    "(mutually exclusive)"},
+        "target": ("inchrdlbind2" if _ird_bind2
+                   else "inchrdlcur" if _ird_cur else "native"),
+        "ctx_va": INCHRDL_CUR_CAVE_VA,
+        "ctx_base": b"\x00" * _ic_w,
+        "ctx_variant": _ctx_variant_fn(INCHRDL_CUR_CAVE_VA,
+                                       INCHRDL_CUR_CAVE_VA,
+                                       b"\x00" * _ic_w),
+    }
+    # Recognition only (static): legacy occupants of the 0x01EA7722 cave
+    # run (all mutually exclusive with --incoming-redial) so --show AND
+    # find_app_start stay clean on F3/R1-e-era images. find_app_start runs
+    # against the default build_patches(), so these states must not depend
+    # on the current flags.
+    def _ird_legacy(gate=False, r1=None, c5t=False):
+        w = bytearray(_ird_w)
+        if gate:
+            w[0:len(GATE_CAVE2_IMG)] = GATE_CAVE2_IMG
+        if r1 == "a":
+            w[R1_CAVE_VA - INCHRDL_CAVE_VA:
+              R1_CAVE_VA - INCHRDL_CAVE_VA + len(R1_CAVE_BYTES)] = \
+                R1_CAVE_BYTES
+        elif r1 == "b":
+            w[R1B_CAVE_VA - INCHRDL_CAVE_VA:
+              R1B_CAVE_VA - INCHRDL_CAVE_VA + len(R1B_CAVE_BYTES)] = \
+                R1B_CAVE_BYTES
+        if c5t:
+            w[CMD5T_CAVE_VA - INCHRDL_CAVE_VA:
+              CMD5T_CAVE_VA - INCHRDL_CAVE_VA
+              + len(CMD5T_CAVE_BYTES)] = CMD5T_CAVE_BYTES
+        return bytes(w)
+    for _lz_key, _lz_w in (
+            ("legacy_gate", _ird_legacy(gate=True)),
+            ("legacy_r1a", _ird_legacy(r1="a")),
+            ("legacy_r1b", _ird_legacy(r1="b")),
+            ("legacy_cmd5t", _ird_legacy(c5t=True)),
+            ("legacy_gate_cmd5t", _ird_legacy(gate=True, c5t=True))):
+        patches["inchrdlcave"]["states"][_lz_key] = _lz_w
+        patches["inchrdlcave"]["labels"][_lz_key] = (
+            "legacy R1-e/F3 cave payloads in this window (mutually "
+            "exclusive with --incoming-redial)")
+    # And teach the R3/R4 hook sites about the R5 hook (shared site).
+    patches["incmode3"]["states"]["inchrdl"] = INCHRDL_HOOK
+    patches["incmode3"]["labels"]["inchrdl"] = (
+        "R5 --incoming-redial hook at this site (mutually exclusive)")
+    patches["inchfp"]["states"]["inchrdl"] = INCHRDL_HOOK
+    patches["inchfp"]["labels"]["inchrdl"] = (
+        "R5 --incoming-redial hook at this site (mutually exclusive)")
     ck = "disabled" if no_cleanup_kick else "stock"
     patches["cleanupkickvar"] = {
         "desc": "app cleanup kick, variable-reason event (0x01E19AD0) -> %s" % ck,
@@ -2331,6 +2946,57 @@ def build_patches(duplex_mode=4, ptt2_action="PTT2", odptt_action="OD-PTT",
         "ctx_variant": _ctx_variant_fn(GATE_CAVE2_VA, GATE_CAVE2_VA,
                                        b"\x00" * GATE_CAVE2_LEN),
     }
+    # Recognition only: the R5 --incoming-redial cave (mutually exclusive
+    # with every legacy occupant) spans these windows; teach each site so
+    # --show stays clean on R5 images.
+    for _lz_name, _lz_va, _lz_len in (
+            ("gatecave", GATE_CAVE2_VA, GATE_CAVE2_LEN),
+            ("r1cave", R1_CAVE_VA, len(R1_CAVE_BYTES)),
+            ("r1bcave", R1B_CAVE_VA, len(R1B_CAVE_BYTES)),
+            ("cmd5tcave", CMD5T_CAVE_VA, len(CMD5T_CAVE_BYTES))):
+        _lz_s = _lz_va - INCHRDL_CAVE_VA
+        patches[_lz_name]["states"]["inchrdlcave"] = \
+            INCHRDL_CAVE_BYTES[_lz_s:_lz_s + _lz_len]
+        patches[_lz_name]["labels"]["inchrdlcave"] = (
+            "R5 --incoming-redial cave occupies this window "
+            "(mutually exclusive)")
+        # R6a --redial-bind: same cave, one branch byte differs at +73.
+        patches[_lz_name]["states"]["inchrdlbind"] = \
+            INCHRDL_CAVE_BYTES_BIND[_lz_s:_lz_s + _lz_len]
+        patches[_lz_name]["labels"]["inchrdlbind"] = (
+            "R6a --incoming-redial --redial-bind cave occupies this window "
+            "(mutually exclusive)")
+        # R6b --redial-current: same cave, guard branch retargeted at +72.
+        patches[_lz_name]["states"]["inchrdlcur"] = \
+            INCHRDL_CAVE_BYTES_CUR[_lz_s:_lz_s + _lz_len]
+        patches[_lz_name]["labels"]["inchrdlcur"] = (
+            "R6b --incoming-redial --redial-current cave occupies this "
+            "window (mutually exclusive)")
+    # R6b CUR window (0x01EA77D0..82A): teach the legacy sites it overlaps
+    # (all mutually exclusive with --redial-current: --cmd5-target's
+    # presstcave/d1thunk, --incoming-mode3's and --incoming-hfp's caves).
+    # Windows wider than the CUR overlap are zero-padded (their tails live
+    # in never-inspected erased cave).
+    for _cu_name, _cu_off, _cu_w in (
+            ("presstcave", _ic_off_p, len(PRESST_CAVE_BYTES)),
+            ("d1thunk", _ic_off_d, len(D1_THUNK_CAVE_BYTES)),
+            ("incmode3cave", _ic_off_m, len(INCMODE3_CAVE_BYTES)),
+            ("inchfpcave", _ic_off_m, len(INCHFP_CAVE_BYTES))):
+        _cu_s = INCHRDL_CUR_BYTES[_cu_off:_cu_off + _cu_w]
+        if len(_cu_s) < _cu_w:
+            _cu_s += b"\x00" * (_cu_w - len(_cu_s))
+        patches[_cu_name]["states"]["inchrdlcur"] = _cu_s
+        patches[_cu_name]["labels"]["inchrdlcur"] = (
+            "R6b --redial-current CUR cave occupies this window "
+            "(mutually exclusive)")
+        # R7 --redial-bind2 shares the window; payload differs from +74 on.
+        _cb_s = INCHRDL_BIND2_BYTES[_cu_off:_cu_off + _cu_w]
+        if len(_cb_s) < _cu_w:
+            _cb_s += b"\x00" * (_cu_w - len(_cb_s))
+        patches[_cu_name]["states"]["inchrdlbind2"] = _cb_s
+        patches[_cu_name]["labels"]["inchrdlbind2"] = (
+            "R7 --redial-bind2 bind cave occupies this window "
+            "(mutually exclusive)")
     for name, (va, ctx_va, ctx_hex, native, spp, what) in KEYCODE_PATCHES.items():
         states = {"native": bytes([0x48, native]), "spp": bytes([0x48, spp])}
         ctx_base = bytes.fromhex(ctx_hex.replace(" ", ""))
@@ -3071,7 +3737,7 @@ def main():
         "device's BD_ADDR ([[r5]+r4+8], the same load the handler does at "
         "0x01E6ECE4) into the stack saved-target cell 0x0001A5F1, then "
         "replays the post. (2) Target kill: the cmd-5 loop's mask test "
-        "19 60 81 42 (0x01E21EF0) becomes a goto to a 38-byte cave that "
+        "19 60 81 42 (0x01E21EF0) becomes a goto to a 40-byte cave that "
         "kills a slot iff its ACL handle (slot+6) is 0 (stuck record) OR "
         "its address equals the stored target (same-device repair) - a "
         "DIFFERENT live incumbent survives, then the page to the target "
@@ -3082,8 +3748,168 @@ def main():
         "cell race-stale at cmd-5 time) the address is captured fresh at "
         "press time in the app task. Cave sites 0x01EA77A8/0x01EA77D0. "
         "Mutually exclusive with --no-cmd5-kill, --r1-conditional-kill, "
-        "--r1-walker-kill and --cmd5-handle (same cmd-5 kill). Requires "
-        "the full multipoint recipe.",
+        "--r1-walker-kill and --cmd5-handle (same cmd-5 kill). FIELD-"
+        "FAILED 2026-10-30/31 without --d1-target-wait (R1-e/R1-e2: the "
+        "kill is async and the page-fn GLOBAL waits read 0 on a stable "
+        "link -> page posted while target record inuse -> guard 0x01E16824 "
+        "refuses -> 'Connecting' hang). Combine with --d1-target-wait "
+        "(R1-e3). Requires the full multipoint recipe.",
+    )
+    ap.add_argument(
+        "--d1-target-wait",
+        dest="d1_target_wait",
+        action="store_true",
+        help="MULTIPOINT D1 (EXPERIMENTAL / UNTESTED, ch. 31 SS30 Q6 GO "
+        "recipe; R1-e3 2026-10-31): make page function FUN_01e600b4's two "
+        "quiescence waits TARGET-SPECIFIC instead of GLOBAL. Three sites: "
+        "LOOP A check 0x01E600DC (10 B) 'r5 = call 0x17F26; if (r5 == 128) "
+        "loop' -> 'r0=r4; call 0x16824; r5=r0; if (r5 != 0) loop'; LOOP B "
+        "call 0x01E6010E (4 B) 'call 0x17F26' -> 'call cave 0x01EA77F0' "
+        "(6-B thunk 'r0=r4; goto 0x16824', tail call). FUN_01e16824 "
+        "returns the conn-record slot pointer iff the TARGET BD_ADDR "
+        "(r4) still holds an inused record, so the page waits for the "
+        "target's OWN record to disappear (which the cmd-5 kill frees) "
+        "instead of racing it through a ~15 ms window. The global check "
+        "reads 0 for a STABLE link (E6 calibration) - that race is the "
+        "root cause of the R1-e/R1-e2 field lockups. A different-address "
+        "target has no record -> no wait -> GOAL orders unaffected. "
+        "Designed to pair with --cmd5-target (R1-e3 = both); works "
+        "standalone too (deterministic stock mask-kill repair). All three "
+        "sites objdump round-trip verified. Requires the full multipoint "
+        "recipe.",
+    )
+    ap.add_argument(
+        "--incoming-mode3",
+        dest="incoming_mode3",
+        action="store_true",
+        help="MULTIPOINT R3 (EXPERIMENTAL / UNTESTED, ch. 30 SS30.14.18-20): "
+        "fix the crippled audio of the INCOMING second device. The name "
+        "classifier 0x01E7EC28 (TID-PTT->1, other->3) runs ONLY on the "
+        "btstack remote-name result (dispatcher FUN_01e19e44 case 7), which "
+        "an incoming join never gets -> the connect-complete mode-switch tbh "
+        "0x01E61270 takes the mode-1 NO-OP exit -> no SCO/audio bind (field "
+        "SS30.14.17: button mic on TX, RX silent everywhere). Hook: the "
+        "routing-byte load r0 = b[r6+212] (RAM 0xB464) @0x01E61270 becomes a "
+        "call to a 54-byte cave @0x01EA77F6: if the byte != 1 return it "
+        "(exact stock); if == 1 AND both conn records (0x1A5B8/0x1A5D4, "
+        "inused = byte@slot+0x12 & 0x20 = bit29 of the slot+0xF word, read "
+        "byte-wise - misaligned word loads FAULT on pi32v2) are inused, "
+        "write 0xB464 = 3 and return 3 -> tbh takes the mode-3 bind call "
+        "0x01E503CA(3) (P6-proven: BT mic TX + RX in earphones). Uses only "
+        "r0/r1 (r1 dead: stock overwrites at 0x01E61274). Accepted caveat: a "
+        "second TID-MIC-class device is also forced to 3; the goal flow is "
+        "one SPP + one HFP, second device always the headset. Does NOT fix "
+        "the once-per-boot incoming re-join limit (P7). No exclusivities; "
+        "combine with the E7 recipe (R3). Objdump round-trip verified.",
+    )
+    ap.add_argument(
+        "--incoming-hfp",
+        dest="incoming_hfp",
+        action="store_true",
+        help="MULTIPOINT R4 (EXPERIMENTAL / UNTESTED, ch. 30 SS30.14.26): "
+        "give the INCOMING second device its profiles. The radio only "
+        "brings up HFP/SCO by dialing the profile toward the device: the "
+        "outgoing page fn FUN_01e600b4 ends with "
+        "user_send_cmd_prepare(1, 6, addr) = START_CONNEC_VIA_ADDR "
+        "(@0x01E60114); an incoming join (headset paging the radio) never "
+        "posts it -> no profile links -> the SS30.14.17 crippling (button "
+        "mic on TX, RX silent). Three sites: (1) hook the routing-byte load "
+        "@0x01E61270 (same site as --incoming-mode3, MUTUALLY EXCLUSIVE) -> "
+        "62-byte cave @0x01EA77F6: if byte == 1 AND both conn records "
+        "inused -> post user_send_cmd_prepare(1, 6, joining_addr) with the "
+        "addr ptr from [sp+20] (the mode-3 arm's own [sp+16] slot), then "
+        "return the byte UNCHANGED (stock mode-1 tbh continues, no forced "
+        "bind, far path never entered); (2) NOP the cmd-1 handler's "
+        "is_1t2_connection bail @0x01E17A2A (it rejects cmd 1 exactly when "
+        "2 links are up = our case). R3 lesson applied: NO forced routing "
+        "byte this time - the profile links are made to exist instead. "
+        "Combine with the E7 recipe. Objdump round-trip verified.",
+    )
+    ap.add_argument(
+        "--incoming-redial",
+        dest="incoming_redial",
+        action="store_true",
+        help="MULTIPOINT R5 (EXPERIMENTAL / UNTESTED, ch. 30 SS30.14.29-31): "
+        "turn the INCOMING second device into an OUTGOING dial so its "
+        "HFP/SCO profiles come up. R4 (FIELD-FAILED SS30.14.28) proved "
+        "cmd 1 replayed for an already-connected ACL no-ops at the "
+        "same-address page guard 0x01E16824; R3 (SS30.14.23) proved a "
+        "forced routing byte binds nothing without SCO. R5: hook the "
+        "routing-byte load @0x01E61270 (same site as --incoming-mode3/"
+        "--incoming-hfp, MUTUALLY EXCLUSIVE) -> 174-byte cave @0x01EA7722: "
+        "if byte == 1 AND both conn records inused, copy the joining "
+        "BD_ADDR ([sp+20]) byte-wise into the stack re-dial mailbox "
+        "0x0001A5F1 (ODD cell - word accesses FAULT), then HCI-Disconnect "
+        "the joiner (find-conn 0x01E17420 -> 0x01E07B08(handle,0x13)); "
+        "the dispatcher event-0 epilogue 0x01E2232E OR-folds the mailbox "
+        "and posts cmd 1 (0x01E21E46) = radio-originated dial, the "
+        "E6/P6-proven profile path. Mailbox stays armed (stock reconnect "
+        "follows; P7 bonus); teardown sentinel 0xF0 + mailbox==addr sets "
+        "byte := 3 (mode-3 local enablers). Loop guard: mailbox already "
+        "== joiner -> untouched. NO cmd-1 bail NOP needed (at redial "
+        "time links=1 < conn_num=2). Cave ends exactly at the cmd5tcave "
+        "boundary 0x01EA77D0; mutually exclusive with --gate-close/"
+        "--r1-conditional-kill/--r1-walker-kill/--cmd5-target (shared "
+        "cave run). Combine with the E7 recipe. Objdump round-trip "
+        "verified.",
+    )
+    ap.add_argument(
+        "--redial-bind",
+        dest="redial_bind",
+        action="store_true",
+        help="MULTIPOINT R6a (EXPERIMENTAL / UNTESTED, ch. 30 SS30.14.34-"
+        "35): requires --incoming-redial. R5 field-FAILED because the "
+        "stack-originated redial's connect-complete hit the cave's loop "
+        "guard and returned with the routing byte UNCHANGED (mode 1 = "
+        "no-op, SS30.14.34: chain sound, wall = app binding). R6a "
+        "retargets that one branch (cave +73: 0x41->0x44) from RET to "
+        "DONE, which stamps byte := 3 at the exact instant a profile-"
+        "complete HFP link to the joined device exists (R3 failed "
+        "because it stamped with no profiles present). One byte of the "
+        "R5 cave; same hook, same window.",
+    )
+    ap.add_argument(
+        "--redial-current",
+        dest="redial_current",
+        action="store_true",
+        help="MULTIPOINT R6b (EXPERIMENTAL / UNTESTED, ch. 30 SS30.14.37): "
+        "requires --incoming-redial; replaces --redial-bind. R6a field-"
+        "FAILED: stamping routing byte 3 at the redial connect-complete "
+        "binds nothing (mode-3 tbh = enable/state path; the real bind asks "
+        "the STACK current-device record, is_current_device() 0x01E184D6: "
+        "valid = bit14 of dword 0xBF39, BD_ADDR = 0xBF41..46 - only a "
+        "radio-originated dial fills it). R6b branches the same loop-guard "
+        "(cave +72: 0x70 0x41 -> 0x10 0x52) to a new 90 B window at "
+        "0x01EA77D0: zero the re-dial mailbox 0x1A5F1..F6 (fixes R6a's S5 "
+        "repair-press regression, releases the P7 stuck record), copy the "
+        "joiner [sp+20] -> 0xBF41..46, set b[0xBF3A] |= 0x40, then post "
+        "user_send_cmd_prepare(6 = READ_REMOTE_NAME, 6, [sp+20]) - the "
+        "name result reaches the btstack dispatcher (0x01E19E5E tbh event 5 "
+        "-> 0x1A106 -> ops[0xBF48+4]) = classifier 0x01E7EC28, which "
+        "unconditionally self-stamps b[0xB464] := 3 (Jabra = default name). "
+        "Routing byte untouched at the tbh; classification lands ~100 ms "
+        "later with a live HFP link.",
+    )
+    ap.add_argument(
+        "--redial-bind2",
+        dest="redial_bind2",
+        action="store_true",
+        help="MULTIPOINT R7 (EXPERIMENTAL / UNTESTED, ch. 30 SS30.14.41): "
+        "requires --incoming-redial; replaces --redial-current (R6b "
+        "field-FAILED: name replay bound nothing + S4 freeze). Phase A "
+        "decoded the real bind: bt-task loop FUN_01e60e44 event 0xB -> "
+        "block 0x01E61292 (is_current_device gate, state 0x10E00 |= 5, "
+        "FUN_01e07ff6(3), 500 ms timer, post stack cmd 0x1E). Its poster "
+        "lives in the precompiled btstack, so R7 jumps into the block "
+        "directly: same guard branch (cave +72: 0x70 0x41 -> 0x10 0x52) "
+        "into 0x01EA77D0, whose first 74 B are R6b's (zero mailbox "
+        "0x1A5F1, joiner -> 0xBF41..46 + b[0xBF3A] |= 0x40 = the current-"
+        "device record the bind gate demands), then stamp routing byte "
+        "b[0xB464] := 3, synthesize the payload [sp+12] = [sp+16] = joiner "
+        "addr (self-copy harmless) and goto 0x01E61292 - the STOCK bind "
+        "block runs synchronously in the bt-task loop, the exact aftermath "
+        "of an app-originated connect (the only flow ever observed "
+        "binding audio, S5b/P6). Name replay dropped.",
     )
     ap.add_argument(
         "--no-cleanup-kick",
@@ -3230,6 +4056,60 @@ def main():
             "--no-cmd5-kill / --r1-conditional-kill / --r1-walker-kill "
             "disable or replace that kill - pick one variant."
         )
+    _tbh_picks = [n for n, v in (("--incoming-mode3", args.incoming_mode3),
+                                 ("--incoming-hfp", args.incoming_hfp),
+                                 ("--incoming-redial", args.incoming_redial))
+                  if v]
+    if len(_tbh_picks) > 1:
+        raise SystemExit(
+            "%s all hook the routing-byte load 0x01E61270; pick one "
+            "(R5 --incoming-redial is the current experiment)."
+            % " and ".join(_tbh_picks)
+        )
+    if args.incoming_redial and (args.gate_close or args.r1_conditional_kill
+                                 or args.r1_walker_kill or args.cmd5_target):
+        raise SystemExit(
+            "--incoming-redial's cave occupies the 0x01EA7722 code-cave "
+            "run shared by --gate-close/--r1-conditional-kill/"
+            "--r1-walker-kill/--cmd5-target; they cannot be combined."
+        )
+    if args.redial_bind and not args.incoming_redial:
+        raise SystemExit(
+            "--redial-bind modifies the --incoming-redial cave (R6a); "
+            "pass --incoming-redial too."
+        )
+    if args.redial_current and not args.incoming_redial:
+        raise SystemExit(
+            "--redial-current modifies the --incoming-redial cave (R6b) "
+            "and adds its CUR window; pass --incoming-redial too."
+        )
+    if args.redial_current and args.redial_bind:
+        raise SystemExit(
+            "--redial-current (R6b) and --redial-bind (R6a) both retarget "
+            "the --incoming-redial loop guard; pick one."
+        )
+    if args.redial_current and args.d1_target_wait:
+        raise SystemExit(
+            "--redial-current's CUR window (0x01EA77D0..0x01EA782A) "
+            "contains the D1 slot-check thunk cave (0x01EA77F0); they "
+            "cannot be combined."
+        )
+    if args.redial_bind2 and not args.incoming_redial:
+        raise SystemExit(
+            "--redial-bind2 modifies the --incoming-redial cave (R7) "
+            "and adds its bind window; pass --incoming-redial too."
+        )
+    if args.redial_bind2 and (args.redial_bind or args.redial_current):
+        raise SystemExit(
+            "--redial-bind2 (R7), --redial-bind (R6a) and --redial-current "
+            "(R6b) all retarget the --incoming-redial loop guard; pick one."
+        )
+    if args.redial_bind2 and args.d1_target_wait:
+        raise SystemExit(
+            "--redial-bind2's bind window (0x01EA77D0..0x01EA782A) "
+            "contains the D1 slot-check thunk cave (0x01EA77F0); they "
+            "cannot be combined."
+        )
 
     PATCHES = build_patches(args.bluetooth_mode, a7, a8, args.conn_num,
                             args.no_kick, args.force_page_scan,
@@ -3239,7 +4119,11 @@ def main():
                             args.no_l2cap_disconnect, args.gate_close,
                             args.no_cmd5_kill, args.r1_conditional_kill,
                             args.r1_walker_kill, args.cmd5_handle,
-                            args.cmd5_target)
+                            args.cmd5_target, args.d1_target_wait,
+                            args.incoming_mode3,
+                            args.incoming_hfp,
+                            args.incoming_redial, args.redial_bind,
+                            args.redial_current, args.redial_bind2)
 
     raw, app, app_start = load_app(args.src)
     print("source: %s (%d bytes)" % (args.src, len(raw)))
@@ -3278,6 +4162,16 @@ def main():
         extra += " --r1-walker-kill (multipoint R1-b)"
     if args.cmd5_handle:
         extra += " --cmd5-handle (multipoint R1-c)"
+    if args.incoming_hfp:
+        extra += " --incoming-hfp (multipoint R4)"
+    if args.incoming_redial:
+        extra += " --incoming-redial (multipoint R5)"
+    if args.redial_bind:
+        extra += " --redial-bind (multipoint R6a)"
+    if args.redial_current:
+        extra += " --redial-current (multipoint R6b)"
+    if args.redial_bind2:
+        extra += " --redial-bind2 (multipoint R7)"
     print("configuration: --bluetooth-mode %d --PTT=%s --PTT2=%s --OD-PTT=%s%s\n"
           % (args.bluetooth_mode, ptt_action, a7, a8, extra))
 
@@ -3330,6 +4224,18 @@ def main():
         wanted += ["cmd5handle"]
     if args.cmd5_target:
         wanted += ["presstore", "presstcave", "cmd5target", "cmd5tcave"]
+    if args.d1_target_wait:
+        wanted += ["d1wait1", "d1wait2", "d1thunk"]
+    if args.incoming_mode3:
+        wanted += ["incmode3", "incmode3cave"]
+    if args.incoming_hfp:
+        wanted += ["inchfp", "inchfpcave", "inchfpbail"]
+    if args.incoming_redial:
+        wanted += ["inchrdl", "inchrdlcave"]
+    if args.redial_current:
+        wanted += ["inchrdlcurcave"]
+    if args.redial_bind2:
+        wanted += ["inchrdlcurcave"]
     wanted = list(dict.fromkeys(wanted))
     if ({"pfbody7", "pfbody8", "pfrelease", "pflabels"} & set(wanted)
             and PF_LITERAL_PATCHES & set(wanted)):

@@ -157,6 +157,46 @@ CASES = [
     ("ct_conf_r1a",     ["--cmd5-target", "--r1-conditional-kill"], 1),
     ("ct_conf_r1b",     ["--cmd5-target", "--r1-walker-kill"], 1),
     ("ct_conf_r1c",     ["--cmd5-target", "--cmd5-handle"], 1),
+    # ch.31 D1 target-specific page waits (R1-e3)
+    ("d1wait",          ["--d1-target-wait"], 0),
+    ("d1wait_e3",       ["--PTT=BT-PTT", "--PTT2=BT-PTT2", "--OD-PTT=PTT",
+                         "--no-kick", "--conn-num=2", "--force-page-scan",
+                         "--force-role-keep", "--no-disconnect-13",
+                         "--no-pairing-kick", "--no-cleanup-kick",
+                         "--no-l2cap-teardown", "--gate-close",
+                         "--cmd5-target", "--d1-target-wait"], 0),
+    ("dt_alias",        ["--D1-TARGET-WAIT"], 0),
+    # ch.30 R3 incoming-mode3 tbh hook (2026-11-02)
+    ("r3",              ["--incoming-mode3"], 0),
+    ("r3_e7",           ["--PTT=BT-PTT", "--PTT2=BT-PTT2", "--OD-PTT=PTT",
+                         "--no-kick", "--conn-num=2", "--force-page-scan",
+                         "--force-role-keep", "--no-disconnect-13",
+                         "--no-pairing-kick", "--incoming-mode3"], 0),
+    ("im3_alias",       ["--INCOMING-MODE3"], 0),
+    # ch.30 R4 incoming-hfp tbh hook + cmd-1 bail (2026-11-03)
+    ("r4",              ["--incoming-hfp"], 0),
+    ("r4_e7",           ["--PTT=BT-PTT", "--PTT2=BT-PTT2", "--OD-PTT=PTT",
+                         "--no-kick", "--conn-num=2", "--force-page-scan",
+                         "--force-role-keep", "--no-disconnect-13",
+                         "--no-pairing-kick", "--incoming-hfp"], 0),
+    ("ihfp_alias",      ["--INCOMING-HFP"], 0),
+    ("ihfp_conf_im3",   ["--incoming-mode3", "--incoming-hfp"], 1),
+    # ch.30 R5 incoming-redial kick+redial at the tbh hook (2026-11-03)
+    ("r5",              ["--incoming-redial"], 0),
+    ("r5_e7",           ["--PTT=BT-PTT", "--PTT2=BT-PTT2", "--OD-PTT=PTT",
+                         "--no-kick", "--conn-num=2", "--force-page-scan",
+                         "--force-role-keep", "--no-disconnect-13",
+                         "--no-pairing-kick", "--incoming-redial"], 0),
+    ("irdl_alias",      ["--INCOMING-REDIAL"], 0),
+    ("irdl_conf_im3",   ["--incoming-mode3", "--incoming-redial"], 1),
+    ("irdl_conf_ihfp",  ["--incoming-hfp", "--incoming-redial"], 1),
+    ("irdl_conf_gate",  ["--gate-close", "--incoming-redial"], 1),
+    ("irdl_conf_c5t",   ["--cmd5-target", "--incoming-redial"], 1),
+    ("irdl_conf_r1b",   ["--r1-walker-kill", "--incoming-redial"], 1),
+    # ch.30 R6a redial-bind (loop-guard stamps byte 3) (2026-11-04)
+    ("r6a",             ["--incoming-redial", "--redial-bind"], 0),
+    ("r6a_alias",       ["--REDIAL-BIND", "--incoming-redial"], 0),
+    ("r6a_alone",       ["--redial-bind"], 1),
 ]
 
 RE_BYTES = re.compile(r"plaintext bytes changed: (\d+)")

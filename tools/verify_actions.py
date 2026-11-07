@@ -863,6 +863,293 @@ if cp.returncode == 0:
        and "MIXED" not in cp.stdout,
        "--show on R1-e combo image clean")
 
+# --- --d1-target-wait (ch.31 Q6 D1, R1-e3 2026-10-31) -----------------------
+d1i = os.path.join(OUTDIR, "v_d1wait.bin")
+cp = run(SRC, d1i, "--only", "d1wait1", "--only", "d1wait2",
+         "--only", "d1thunk", "--d1-target-wait")
+ck(cp.returncode == 0, "--d1-target-wait build")
+if cp.returncode == 0:
+    a = dec(d1i)
+    ck(g(a, P.D1_WAIT1_VA, 10) == P.D1_WAIT1
+       and g(a, P.D1_WAIT2_VA, 4) == P.D1_WAIT2
+       and g(a, P.D1_THUNK_CAVE_VA, 6) == P.D1_THUNK_CAVE_BYTES,
+       "D1 three sites written")
+    ck(P.D1_WAIT1 == bytes.fromhex("4016bdeaa1b30516f555"),
+       "D1_WAIT1 byte-identical to ch.31 recipe")
+    wins = [(P.D1_WAIT1_VA, 10), (P.D1_WAIT2_VA, 4), (P.D1_THUNK_CAVE_VA, 6)]
+    offs = [P.va_to_off(v) for v, _ in wins]
+    d = [i for i in range(len(stock)) if stock[i] != a[i]]
+    ck(all(any(o <= i < o + n for o, n in zip(offs, [w for _, w in wins]))
+           for i in d),
+       "D1 patch touches only its three windows (%d bytes)" % len(d))
+    cp = run(d1i, "--show", "--d1-target-wait")
+    ck(cp.returncode == 0 and "UNKNOWN" not in cp.stdout
+       and "MIXED" not in cp.stdout,
+       "--show on D1 image clean")
+    cp2 = run(d1i, d1i + ".2", "--only", "d1wait1", "--only", "d1wait2",
+              "--only", "d1thunk", "--d1-target-wait")
+    ck(cp2.returncode == 0 and "Nothing to do" in cp2.stdout,
+       "--d1-target-wait idempotent")
+
+# R1-e3 = full F3-v3 recipe + --cmd5-target + --d1-target-wait
+e3 = os.path.join(OUTDIR, "v_r1e3.bin")
+cp = run(SRC, e3, "--PTT=BT-PTT", "--PTT2=BT-PTT2", "--OD-PTT=PTT",
+         "--no-kick", "--conn-num=2", "--force-page-scan",
+         "--force-role-keep", "--no-disconnect-13", "--no-pairing-kick",
+         "--no-cleanup-kick", "--no-l2cap-teardown", "--gate-close",
+         "--cmd5-target", "--d1-target-wait")
+ck(cp.returncode == 0, "R1-e3 combo build (F3-v3 + cmd5-target + d1)")
+if cp.returncode == 0:
+    a = dec(e3)
+    ck(g(a, P.CMD5T_HOOK_VA, 4) == P.CMD5T_HOOK
+       and g(a, P.CMD5T_CAVE_VA, len(P.CMD5T_CAVE_BYTES)) == P.CMD5T_CAVE_BYTES
+       and g(a, P.PRESST_HOOK_VA, 4) == P.PRESST_HOOK
+       and g(a, P.PRESST_CAVE_VA, len(P.PRESST_CAVE_BYTES))
+       == P.PRESST_CAVE_BYTES
+       and g(a, P.D1_WAIT1_VA, 10) == P.D1_WAIT1
+       and g(a, P.D1_WAIT2_VA, 4) == P.D1_WAIT2
+       and g(a, P.D1_THUNK_CAVE_VA, 6) == P.D1_THUNK_CAVE_BYTES
+       and g(a, P.GATE_SPP_TRAMP_VA, 4) == P.GATE_SPP_TRAMP
+       and g(a, 0x01E21EF4, 4) == bytes.fromhex("bfeace35"),
+       "R1-e3 combo carries all seven sites, gate armed, kill stock")
+    cp = run(e3, "--show", "--PTT=BT-PTT", "--PTT2=BT-PTT2", "--OD-PTT=PTT",
+             "--no-kick", "--conn-num=2", "--force-page-scan",
+             "--force-role-keep", "--no-disconnect-13", "--no-pairing-kick",
+             "--no-cleanup-kick", "--no-l2cap-teardown", "--gate-close",
+             "--cmd5-target", "--d1-target-wait")
+    ck(cp.returncode == 0 and "UNKNOWN" not in cp.stdout
+       and "MIXED" not in cp.stdout,
+       "--show on R1-e3 combo image clean")
+
+# --- --incoming-mode3 (ch.30 §30.14.18-20, R3 2026-11-02) --------------------
+r3i = os.path.join(OUTDIR, "v_r3.bin")
+cp = run(SRC, r3i, "--only", "incmode3", "--only", "incmode3cave",
+         "--incoming-mode3")
+ck(cp.returncode == 0, "--incoming-mode3 build")
+if cp.returncode == 0:
+    a = dec(r3i)
+    ck(g(a, P.INCMODE3_HOOK_VA, 4) == P.INCMODE3_HOOK
+       and g(a, P.INCMODE3_CAVE_VA, len(P.INCMODE3_CAVE_BYTES))
+       == P.INCMODE3_CAVE_BYTES,
+       "R3 hook + cave written")
+    ck(P.INCMODE3_HOOK == bytes.fromhex("82eac132"),
+       "R3 hook byte-identical to objdump-verified call 0x01EA77F6")
+    wins = [(P.INCMODE3_HOOK_VA, 4),
+            (P.INCMODE3_CAVE_VA, len(P.INCMODE3_CAVE_BYTES))]
+    offs = [P.va_to_off(v) for v, _ in wins]
+    d = [i for i in range(len(stock)) if stock[i] != a[i]]
+    ck(all(any(o <= i < o + n for o, n in zip(offs, [w for _, w in wins]))
+           for i in d),
+       "R3 patch touches only its two windows (%d bytes)" % len(d))
+    cp = run(r3i, "--show", "--incoming-mode3")
+    ck(cp.returncode == 0 and "UNKNOWN" not in cp.stdout
+       and "MIXED" not in cp.stdout,
+       "--show on R3 image clean")
+    cp2 = run(r3i, r3i + ".2", "--only", "incmode3", "--only", "incmode3cave",
+              "--incoming-mode3")
+    ck(cp2.returncode == 0 and "Nothing to do" in cp2.stdout,
+       "--incoming-mode3 idempotent")
+
+# R3 combo = E7 recipe + --incoming-mode3
+r3c = os.path.join(OUTDIR, "v_r3e7.bin")
+cp = run(SRC, r3c, "--PTT=BT-PTT", "--PTT2=BT-PTT2", "--OD-PTT=PTT",
+         "--no-kick", "--conn-num=2", "--force-page-scan",
+         "--force-role-keep", "--no-disconnect-13", "--no-pairing-kick",
+         "--incoming-mode3")
+ck(cp.returncode == 0, "R3 combo build (E7 recipe + incoming-mode3)")
+if cp.returncode == 0:
+    a = dec(r3c)
+    ck(g(a, P.INCMODE3_HOOK_VA, 4) == P.INCMODE3_HOOK
+       and g(a, P.INCMODE3_CAVE_VA, len(P.INCMODE3_CAVE_BYTES))
+       == P.INCMODE3_CAVE_BYTES
+       and g(a, P.D1_THUNK_CAVE_VA, 6) == b"\x00" * 6,
+       "R3 combo carries hook + cave, D1 thunk left erased")
+    cp = run(r3c, "--show", "--PTT=BT-PTT", "--PTT2=BT-PTT2", "--OD-PTT=PTT",
+             "--no-kick", "--conn-num=2", "--force-page-scan",
+             "--force-role-keep", "--no-disconnect-13", "--no-pairing-kick",
+             "--incoming-mode3")
+    ck(cp.returncode == 0 and "UNKNOWN" not in cp.stdout
+       and "MIXED" not in cp.stdout,
+       "--show on R3 combo image clean")
+
+# --- --incoming-hfp (ch.30 §30.14.26-27, R4 2026-11-03) ----------------------
+r4i = os.path.join(OUTDIR, "v_r4.bin")
+cp = run(SRC, r4i, "--only", "inchfp", "--only", "inchfpcave",
+         "--only", "inchfpbail", "--incoming-hfp")
+ck(cp.returncode == 0, "--incoming-hfp build")
+if cp.returncode == 0:
+    a = dec(r4i)
+    ck(g(a, P.INCHFP_HOOK_VA, 4) == P.INCHFP_HOOK
+       and g(a, P.INCHFP_CAVE_VA, len(P.INCHFP_CAVE_BYTES))
+       == P.INCHFP_CAVE_BYTES
+       and g(a, P.INCHFP_BAIL_VA, 4) == b"\x00" * 4,
+       "R4 hook + cave + cmd-1 bail NOP written")
+    ck(P.INCHFP_HOOK == bytes.fromhex("82eac132"),
+       "R4 hook byte-identical to objdump-verified call 0x01EA77F6")
+    ck(P.INCHFP_CAVE_BYTES == bytes.fromhex(
+        "50ee640d31e1ff0f8155c1ffcaa5010050ee100060e12000004d"
+        "c1ffe6a5010050ee100060e120000045022540214126bbea8280"
+        "50ee640d8000"),
+       "R4 cave bytes match the objdump round-trip (58 B)")
+    wins = [(P.INCHFP_HOOK_VA, 4),
+            (P.INCHFP_CAVE_VA, len(P.INCHFP_CAVE_BYTES)),
+            (P.INCHFP_BAIL_VA, 4)]
+    offs = [P.va_to_off(v) for v, _ in wins]
+    d = [i for i in range(len(stock)) if stock[i] != a[i]]
+    ck(all(any(o <= i < o + n for o, n in zip(offs, [w for _, w in wins]))
+           for i in d),
+       "R4 patch touches only its three windows (%d bytes)" % len(d))
+    cp = run(r4i, "--show", "--incoming-hfp")
+    ck(cp.returncode == 0 and "UNKNOWN" not in cp.stdout
+       and "MIXED" not in cp.stdout,
+       "--show on R4 image clean")
+    # cross-recognition: the R3 image's cave in the shared window must
+    # still --show clean under the R4 flag
+    cp = run(r3i, "--show", "--incoming-hfp")
+    ck(cp.returncode == 0 and "UNKNOWN" not in cp.stdout
+       and "MIXED" not in cp.stdout,
+       "--show --incoming-hfp on R3 image clean (shared window)")
+    cp2 = run(r4i, r4i + ".2", "--only", "inchfp", "--only", "inchfpcave",
+              "--only", "inchfpbail", "--incoming-hfp")
+    ck(cp2.returncode == 0 and "Nothing to do" in cp2.stdout,
+       "--incoming-hfp idempotent")
+
+# R4 combo = E7 recipe + --incoming-hfp
+r4c = os.path.join(OUTDIR, "v_r4e7.bin")
+cp = run(SRC, r4c, "--PTT=BT-PTT", "--PTT2=BT-PTT2", "--OD-PTT=PTT",
+         "--no-kick", "--conn-num=2", "--force-page-scan",
+         "--force-role-keep", "--no-disconnect-13", "--no-pairing-kick",
+         "--incoming-hfp")
+ck(cp.returncode == 0, "R4 combo build (E7 recipe + incoming-hfp)")
+if cp.returncode == 0:
+    a = dec(r4c)
+    ck(g(a, P.INCHFP_HOOK_VA, 4) == P.INCHFP_HOOK
+       and g(a, P.INCHFP_CAVE_VA, len(P.INCHFP_CAVE_BYTES))
+       == P.INCHFP_CAVE_BYTES
+       and g(a, P.INCHFP_BAIL_VA, 4) == b"\x00" * 4
+       and g(a, P.D1_THUNK_CAVE_VA, 6) == b"\x00" * 6,
+       "R4 combo carries hook + cave + bail, D1 thunk left erased")
+    cp = run(r4c, "--show", "--PTT=BT-PTT", "--PTT2=BT-PTT2", "--OD-PTT=PTT",
+             "--no-kick", "--conn-num=2", "--force-page-scan",
+             "--force-role-keep", "--no-disconnect-13", "--no-pairing-kick",
+             "--incoming-hfp")
+    ck(cp.returncode == 0 and "UNKNOWN" not in cp.stdout
+       and "MIXED" not in cp.stdout,
+       "--show on R4 combo image clean")
+
+# --- --incoming-redial (ch.30 SS30.14.29-31, R5 2026-11-03) ------------------
+r5i = os.path.join(OUTDIR, "v_r5.bin")
+cp = run(SRC, r5i, "--only", "inchrdl", "--only", "inchrdlcave",
+         "--incoming-redial")
+ck(cp.returncode == 0, "--incoming-redial build")
+if cp.returncode == 0:
+    a = dec(r5i)
+    ck(g(a, P.INCHRDL_HOOK_VA, 4) == P.INCHRDL_HOOK
+       and g(a, P.INCHRDL_CAVE_VA, len(P.INCHRDL_CAVE_BYTES))
+       == P.INCHRDL_CAVE_BYTES,
+       "R5 hook + cave written")
+    ck(P.INCHRDL_HOOK == bytes.fromhex("82ea5732"),
+       "R5 hook byte-identical to objdump-verified call 0x01EA7722")
+    ck(P.INCHRDL_CAVE_BYTES == bytes.fromhex(
+        "50ee640d00f80d0210f803e050ee640d8000022580ea2c00f059402352ee640d"
+        "8000c1ffcaa5010050ee100060e12000704dc1ffe6a5010050ee100060e12000"
+        "7045022580ea14007041c0fff1a50100012510851207820700254120bbea4f7e"
+        "6055c1ff13000000bbeabd0140218000c1fff1a5010010072307381980561007"
+        "230738198052100723073819804e100723073819804a10072307381980461007"
+        "2307381980424020800040218000"),
+       "R5 cave bytes match the objdump round-trip (174 B)")
+    wins = [(P.INCHRDL_HOOK_VA, 4),
+            (P.INCHRDL_CAVE_VA, len(P.INCHRDL_CAVE_BYTES))]
+    offs = [P.va_to_off(v) for v, _ in wins]
+    d = [i for i in range(len(stock)) if stock[i] != a[i]]
+    ck(all(any(o <= i < o + n for o, n in zip(offs, [w for _, w in wins]))
+           for i in d),
+       "R5 patch touches only its two windows (%d bytes)" % len(d))
+    ck(P.INCHRDL_CAVE_VA + len(P.INCHRDL_CAVE_BYTES) == P.PRESST_CAVE_VA,
+       "R5 cave ends exactly at the presstcave window start (cmd5tcave end)")
+    cp = run(r5i, "--show", "--incoming-redial")
+    ck(cp.returncode == 0 and "UNKNOWN" not in cp.stdout
+       and "MIXED" not in cp.stdout,
+       "--show on R5 image clean")
+    # cross-recognition: R3/R4 images (zero window, shared hook) and the
+    # legacy-window images must stay classified under the R5 flag and vice
+    # versa.
+    for other, tag in ((r3i, "R3"), (r4i, "R4")):
+        cp = run(other, "--show", "--incoming-redial")
+        ck(cp.returncode == 0 and "UNKNOWN" not in cp.stdout
+           and "MIXED" not in cp.stdout,
+           "--show --incoming-redial on %s image clean" % tag)
+        cp = run(r5i, "--show", "--incoming-mode3")
+        ck(cp.returncode == 0 and "UNKNOWN" not in cp.stdout
+           and "MIXED" not in cp.stdout,
+           "--show --incoming-mode3 on R5 image clean")
+    cp = run(gc, "--show", "--incoming-redial")
+    ck(cp.returncode == 0 and "UNKNOWN" not in cp.stdout
+       and "MIXED" not in cp.stdout,
+       "--show --incoming-redial on gated image clean (legacy window)")
+    cp = run(c5t, "--show", "--incoming-redial")
+    ck(cp.returncode == 0 and "UNKNOWN" not in cp.stdout
+       and "MIXED" not in cp.stdout,
+       "--show --incoming-redial on R1-e image clean (legacy window)")
+    cp2 = run(r5i, r5i + ".2", "--only", "inchrdl", "--only", "inchrdlcave",
+              "--incoming-redial")
+    ck(cp2.returncode == 0 and "Nothing to do" in cp2.stdout,
+       "--incoming-redial idempotent")
+
+# R5 combo = E7 recipe + --incoming-redial
+r5c = os.path.join(OUTDIR, "v_r5e7.bin")
+cp = run(SRC, r5c, "--PTT=BT-PTT", "--PTT2=BT-PTT2", "--OD-PTT=PTT",
+         "--no-kick", "--conn-num=2", "--force-page-scan",
+         "--force-role-keep", "--no-disconnect-13", "--no-pairing-kick",
+         "--incoming-redial")
+ck(cp.returncode == 0, "R5 combo build (E7 recipe + incoming-redial)")
+if cp.returncode == 0:
+    a = dec(r5c)
+    ck(g(a, P.INCHRDL_HOOK_VA, 4) == P.INCHRDL_HOOK
+       and g(a, P.INCHRDL_CAVE_VA, len(P.INCHRDL_CAVE_BYTES))
+       == P.INCHRDL_CAVE_BYTES
+       and g(a, P.INCHFP_BAIL_VA, 4) == P.INCHFP_BAIL_CTX
+       and g(a, P.D1_THUNK_CAVE_VA, 6) == b"\x00" * 6,
+       "R5 combo carries hook + cave, cmd-1 bail stock, D1 thunk erased")
+    cp = run(r5c, "--show", "--PTT=BT-PTT", "--PTT2=BT-PTT2", "--OD-PTT=PTT",
+             "--no-kick", "--conn-num=2", "--force-page-scan",
+             "--force-role-keep", "--no-disconnect-13", "--no-pairing-kick",
+             "--incoming-redial")
+    ck(cp.returncode == 0 and "UNKNOWN" not in cp.stdout
+       and "MIXED" not in cp.stdout,
+       "--show on R5 combo image clean")
+
+# --- --redial-bind (ch.30 SS30.14.34-35, R6a 2026-11-04) ---------------------
+r6i = os.path.join(OUTDIR, "v_r6a.bin")
+cp = run(SRC, r6i, "--only", "inchrdl", "--only", "inchrdlcave",
+         "--incoming-redial", "--redial-bind")
+ck(cp.returncode == 0, "--incoming-redial --redial-bind build")
+if cp.returncode == 0:
+    a = dec(r6i)
+    ck(g(a, P.INCHRDL_HOOK_VA, 4) == P.INCHRDL_HOOK
+       and g(a, P.INCHRDL_CAVE_VA, len(P.INCHRDL_CAVE_BYTES_BIND))
+       == P.INCHRDL_CAVE_BYTES_BIND,
+       "R6a hook + bind-cave written")
+    ck(len(P.INCHRDL_CAVE_BYTES_BIND) == 174
+       and P.INCHRDL_CAVE_BYTES_BIND[:73] == P.INCHRDL_CAVE_BYTES[:73]
+       and P.INCHRDL_CAVE_BYTES_BIND[73] == 0x44
+       and P.INCHRDL_CAVE_BYTES_BIND[74:] == P.INCHRDL_CAVE_BYTES[74:],
+       "R6a differs from R5 only at cave +73 (0x41->0x44: guard RET->DONE)")
+    ck(P.INCHRDL_CAVE_BYTES_BIND[72] == 0x70
+       and 72 + (0x44 - 95) * 2 == 18,
+       "R6a branch lands on DONE (+18, stamp byte:=3)")
+    cp = run(r6i, "--show", "--incoming-redial", "--redial-bind")
+    ck(cp.returncode == 0 and "UNKNOWN" not in cp.stdout
+       and "MIXED" not in cp.stdout, "--show on R6a image clean")
+    cp = run(r5i, "--show", "--incoming-redial", "--redial-bind")
+    ck(cp.returncode == 0 and "UNKNOWN" not in cp.stdout
+       and "MIXED" not in cp.stdout,
+       "--show --redial-bind on R5 image clean (cross-recognition)")
+    cp2 = run(r6i, r6i + ".2", "--only", "inchrdl", "--only", "inchrdlcave",
+              "--incoming-redial", "--redial-bind")
+    ck(cp2.returncode == 0 and "Nothing to do" in cp2.stdout,
+       "--redial-bind idempotent")
+
 # --- cleanup ----------------------------------------------------------------
 if not fail and not KEEP:
     shutil.rmtree(OUTDIR)
