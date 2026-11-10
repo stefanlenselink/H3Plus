@@ -1273,7 +1273,7 @@ SPPCLOSE_STATES = {
 }
 SPPCLOSE_LABELS = {
     "stock": "spp_channel_disconnect() active",
-    "disabled": "mov r0,#0; rts (spp_channel_disconnect disabled; UNTESTED)",
+    "disabled": "r0=0; pc=[sp++] (spp_channel_disconnect disabled; UNTESTED)",
     "f3gate": "--gate-close trampoline present (mutually exclusive)",
 }
 
@@ -1300,10 +1300,14 @@ SPPCLOSE_LABELS = {
 #   only) for EVERY caller, including any poster the E9 census missed.
 #   Fall-through safe: next insn @0x01E17978 is the chain's next je.
 # Patch site 2: entry no-op of l2cap_disconnect() at 0x01E173D0 (stock
-#   `10 04 bf ea` -> `00 23 80 00` = mov r0,#0; rts). Kills every direct
-#   caller at once (the four SPP-SM sites above + spp_channel_disconnect,
-#   already NOP-ed by --no-spp-close, + any other). Return 0 = success:
-#   callers advance their state machines while the channel stays open.
+#   `10 04 bf ea` -> `00 23 80 00` = `r0 = [sp+12]; rts` — an early return
+#   that skips the whole disconnect body. NOTE (cross-checked against the
+#   pi32v2-isa oracle table 2026-11-10, findings ch. 34): `00 23` decodes as
+#   `r0 = [sp+0xC]`, NOT `mov r0,#0` — r0 is caller-stack garbage at entry,
+#   not 0. E11 hardware-confirmed anyway: callers ignore the return value
+#   and advance while the channel stays open, so the BYTES STAY as flashed.
+#   Kills every direct caller at once (the four SPP-SM sites above +
+#   spp_channel_disconnect, already NOP-ed by --no-spp-close, + any other).
 #   Pointer scan: no 32-bit LE refs to either address (direct calls only).
 # SIDE EFFECTS: the app can never tear down ANY L2CAP channel (RFCOMM/AVDTP
 # included) through these paths; stale channels persist until power-cycle.
@@ -1322,12 +1326,12 @@ L2CAPDISC_BRANCH_STATES = {
 }
 L2CAPDISC_ENTRY_STATES = {
     "stock": bytes.fromhex("1004bfea"),
-    "disabled": bytes.fromhex("00238000"),  # mov r0,#0; rts -> disconnect no-op
+    "disabled": bytes.fromhex("00238000"),  # r0=[sp+12]; rts -> early return, body skipped
     "f3gate": bytes.fromhex("c4eab581"),    # F3 gate trampoline replaces the entry
 }
 L2CAPDISC_LABELS = {
     "stock": "l2cap disconnect path active",
-    "disabled": "nop / mov r0,#0; rts (l2cap disconnect disabled; UNTESTED)",
+    "disabled": "nop / r0=[sp+12]; rts early-return (l2cap disconnect disabled; UNTESTED)",
     "f3gate": "--gate-close trampoline present (mutually exclusive)",
 }
 
@@ -3974,7 +3978,8 @@ def main():
         "of the channel-close eviction (the layer that survived E6-E10). "
         "NOPs the `je r11,#0x4a` dispatch branch at 0x01E17974 (code 0x4a "
         "-> default no-op for EVERY caller, incl. posters E9 missed) and "
-        "entry-no-ops l2cap_disconnect() at 0x01E173D0 (mov r0,#0; rts - "
+        "entry-no-ops l2cap_disconnect() at 0x01E173D0 (early return "
+        "`r0=[sp+12]; rts` - callers ignore the value, E11-confirmed - "
         "kills all direct callers incl. the four SPP-state-machine sites). "
         "E10 evidence: with --no-spp-close and both 0x4a posters NOP-ed, "
         "Paired->Connect still closed ALL channels on the PC link (two "

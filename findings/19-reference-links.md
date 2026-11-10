@@ -33,6 +33,14 @@
 | <https://kagaimiq.github.io/jielie/cpu/pi32v2.html> | pi32v2 opcode tables + **ELF machine 0xF1 (241)** + SFR list. |
 | <https://blog.quarkslab.com/reverse-engineering-a-jieli-bt-firmware.html> | Quarkslab's JieLi BT firmware teardown — the methodology inspiration; Ghidra module at <https://github.com/quarkslab/ghidra-jieli>. |
 
+### Open pi32v2 ISA reference & open toolchain (added 2026-11-10, see [Ch. 34](34-pi32v2-isa-open-reference.md))
+
+| Resource | Why it matters |
+|---|---|
+| <https://github.com/jvitkauskas/pi32v2-isa> | ⭐ **The open pi32v2 ISA.** `isa/pi32v2.toml` — 1,165 instruction forms, every one confirmed against the JieLi toolchain oracle, 1,079 hardware-confirmed on AC791N (same `-mcpu=r3` as our BR23). Table + docs are **CC0-1.0**, code MIT-0. Pure-Python assembler/linker/objdump proven byte-identical to JieLi's; `python3 -m pi32v2isa disasm <hex>`; oracle protocol (`docs/ORACLE.md`) + gap list (`docs/GAPS.md`). Cross-validates every core encoding this project hand-derived; closes our `???` holes (hw divide, 32-bit stack ld/st, 6-byte `FF00–0xFFEF` branches, predication blocks, psr flags). Used by `tools/isa_xcheck.py` and `pi32dis.py --upstream`. |
+| <https://github.com/jvitkauskas/pi32v2-llvm> | Open LLVM 23.1.5 target for pi32v2 (branch `pi32v2`): clang/ld.lld/llvm-mc/objdump, static Linux releases `pi32v2-23.1.5-5`, `-mcpu generic\|r3\|ac791n`; reads JieLi's LLVM-4.0.1 SDK bitcode (4,898/4,900 objects); `tools/dropin` replicates the `/opt/jieli` layout so SDK Makefiles build unchanged. The open replacement for the closed compiler on the ch. 25 compile route / ch. 28 SDK rebuild. |
+| <https://github.com/jvitkauskas/m-bootloader> | Same author; open AC79/BR23 bootloader project — its `docs/SPEC.md` §10.1 (mask-ROM USB download mode) is the basis of pi32v2-isa's hardware RAM-runner harness, conceptually parallel to our `jl_hidboot.py` HID path (ch. 32). |
+
 ### Architecture / disassembly
 
 - `pi32` (JieLi proprietary 32-bit core) — search for community Ghidra SLEIGH definitions; completeness varies. The `jielie` repo above is the best starting reference. **Since 2026-09-30 we also have the official LLVM objdump backend (§24.5) — the ground truth for pi32v2 decoding.**

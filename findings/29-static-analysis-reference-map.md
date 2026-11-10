@@ -144,7 +144,7 @@ both suites green. "HW" = hardware verdict.
 | `--no-cleanup-kick` | `0x01E19AD0`, `0x01E19B14`, `0x01E20AB2` | `0x01E000`, `0x025000` | `bfeadffc`, `bfeabdfc`, `bfeaeec4` → `00000000` ×3 | E8 partial — HCI eviction dead (2026-10-19) |
 | `--no-l2cap-teardown` | `0x01E61E22`, `0x01E60188` | `0x066000`, `0x065000` | `bdea84ad`, `bdead1bb` → `00000000` ×2 | E9 FAILED (2026-10-20) — co-actors |
 | `--no-spp-close` | `0x01E173EE` | `0x01C000` | `c0ff40a7 → 40200004` (`mov r0,#0; pop pc`) | E10 FAILED (2026-10-20) — walk bypasses |
-| `--no-l2cap-disconnect` | `0x01E17974`, `0x01E173D0` | `0x01C000` | `0bf8d494 → 00000000`; `1004bfea → 00238000` (`mov r0,#0; rts`) | **E11: evictor DEAD** (2026-10-20) but corrupts normal ops (§27.19) → rollback prepared |
+| `--no-l2cap-disconnect` | `0x01E17974`, `0x01E173D0` | `0x01C000` | `0bf8d494 → 00000000`; `1004bfea → 00238000` (`r0=[sp+12]; rts` early return — ch. 34 correction) | **E11: evictor DEAD** (2026-10-20) but corrupts normal ops (§27.19) → rollback prepared |
 | key remaps | `0x01E60A74`/`0x01E60A7E`, `0x01E4BAEA`, `0x01E52362`, `0x01E7EC82`/`0x01E7EC86` | `0x061000`–`0x062000`, `0x04E000`, `0x056000`, `0x083000` | mode imm + call-arg rewrites | HW-confirmed (ch. 13) |
 | BT-PTT2 | cave `0x01EA76DE` + trampoline window `0x01E75E38`–`0x01E75E92` | `0x0A7000` + `0x07A000` | direct rewrite, tbb untouched | **HW-confirmed** (ch. 23) |
 

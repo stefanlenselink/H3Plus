@@ -195,6 +195,8 @@ The repositories used as source, information and tooling:
 | <https://github.com/kagaimiq/jl-uboot-tool> | USB/UART bootloader protocol — the tool used to dump and reflash this radio |
 | <https://github.com/kagaimiq/jielie> | JieLi chip docs — the [SFC/ENC notes](https://github.com/kagaimiq/jielie/blob/main/periph/sfc.md) solved the app-region cipher |
 | <https://github.com/kagaimiq/jl-misctools> | JieLi firmware/package utilities |
+| <https://github.com/jvitkauskas/pi32v2-isa> | Open pi32v2 ISA reference — oracle-confirmed 1,165-form instruction table (CC0), byte-exact Python assembler/linker/objdump, LLVM-backend generators; validated every core encoding in this repo ([findings ch. 34](findings/34-pi32v2-isa-open-reference.md)) |
+| <https://github.com/jvitkauskas/pi32v2-llvm> | Open LLVM 23.1.5 toolchain for pi32v2 (`-mcpu=r3`) — clang/ld.lld/llvm-mc releases; the open replacement for the closed JieLi compiler on the compile/SDK routes (ch. 34) |
 | <https://github.com/NationalSecurityAgency/ghidra> | Disassembly of the pi32 bootloader |
 | <https://github.com/upx/upx> | Unpacking the vendor `Update App.exe` |
 | <https://github.com/icsharpcode/ILSpy> | Analyzing the vendor .NET CPS |

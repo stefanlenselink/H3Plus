@@ -626,7 +626,7 @@ ck(cp.returncode == 0, "--no-spp-close build")
 if cp.returncode == 0:
     a = dec(spc)
     ck(g(a, P.SPPCLOSE_VA, 8) == bytes.fromhex("4020000401000060"),
-       "spp_channel_disconnect entry -> mov r0,#0; rts, push rets intact")
+       "spp_channel_disconnect entry -> r0=0; pc=[sp++] (return 0), push rets intact")
     d = [i for i in range(len(stock)) if stock[i] != a[i]]
     o1 = P.va_to_off(P.SPPCLOSE_VA)
     ck(len(d) == 4 and all(o1 <= i < o1 + 4 for i in d),
@@ -677,7 +677,7 @@ if cp.returncode == 0:
     ck(g(a, P.L2CAPDISC_BRANCH_VA, 8) == bytes.fromhex("0000000000ff58b0"),
        "0x4a dispatch branch -> nop;nop, falls through to default")
     ck(g(a, P.L2CAPDISC_ENTRY_VA, 8) == bytes.fromhex("00238000b1fa0049"),
-       "l2cap_disconnect entry -> mov r0,#0; rts")
+       "l2cap_disconnect entry -> r0=[sp+12]; rts (early return; r0 garbage, callers ignore)")
     d = [i for i in range(len(stock)) if stock[i] != a[i]]
     o1 = P.va_to_off(P.L2CAPDISC_BRANCH_VA)
     o2 = P.va_to_off(P.L2CAPDISC_ENTRY_VA)

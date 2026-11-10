@@ -23,6 +23,13 @@ Usage:
     python tools/pi32dis.py <file> --va 0x01E9BC3C --end 0x01E9BD00
     python tools/pi32dis.py <file> --flash 0x05FDE2 --count 40
     python tools/pi32dis.py <file> --func 0x01E9BC3C        # follow to return
+
+Optional fallback (--upstream, see findings/34): words our hand-built spec
+cannot decode are looked up in the oracle-verified table of
+github.com/jvitkauskas/pi32v2-isa (clone it, pass its dir). Strictly additive:
+default output is unchanged; with --upstream, words upstream calls undefined
+also stop matching the empirical Group7/CONDBR special cases.
+    python tools/pi32dis.py <file> --va 0x01E173D0 --count 20 --upstream ../pi32v2-isa
 """
 # Copyright (c) 2026 Stefan Lenselink <Stefan@lenselink.org>
 #
@@ -265,8 +272,30 @@ def render(insn, raw, addr):
     return text, target
 
 
+def load_upstream(upstream_dir, mcpu="r3"):
+    """Load the Decoder of the upstream pi32v2-isa repo (findings/34).
+
+    upstream_dir is a clone of https://github.com/jvitkauskas/pi32v2-isa;
+    its isa/pi32v2.toml table (1165 forms, oracle-confirmed vs the JieLi
+    toolchain) is used as a fallback for words our hand spec cannot decode.
+    Exits with a clear message when the repo or package is missing.
+    """
+    upstream_dir = os.path.abspath(upstream_dir)
+    if not os.path.isdir(upstream_dir):
+        sys.exit("pi32dis: upstream repo not found at %s (clone "
+                 "github.com/jvitkauskas/pi32v2-isa or pass --upstream)" % upstream_dir)
+    sys.path.insert(0, upstream_dir)
+    try:
+        from pi32v2isa import objdump as _objdump
+        from pi32v2isa import table as _table
+    except ImportError as e:
+        sys.exit("pi32dis: cannot import pi32v2isa from %s: %s" % (upstream_dir, e))
+    tab = _table.load(os.path.join(upstream_dir, "isa", "pi32v2.toml"))
+    return _objdump.decoder_for(tab, mcpu=mcpu)
+
+
 class Disassembler:
-    def __init__(self, data, base=LOAD_BASE, spec=SPEC_PATH):
+    def __init__(self, data, base=LOAD_BASE, spec=SPEC_PATH, upstream=None, mcpu="r3"):
         self.data = data
         self.base = base
         self.entries = parse_spec(spec)
@@ -274,6 +303,20 @@ class Disassembler:
         self.by_len = {16: [], 32: [], 48: []}
         for e in self.entries:
             self.by_len[e.nbits].append(e)
+        # Opt-in fallback decoder (upstream pi32v2-isa, findings/34).
+        self.updec = load_upstream(upstream, mcpu) if upstream else None
+
+    def upstream_decode(self, off):
+        """Upstream pi32v2-isa decode at file offset `off`, or None.
+
+        Returns (insn, values, size, text) per upstream's Decoder.decode().
+        None both when no fallback is loaded and when upstream finds the word
+        undefined — callers that only care "is upstream OK with this word"
+        must check self.updec separately.
+        """
+        if self.updec is None:
+            return None
+        return self.updec.decode(self.data, off)
 
     def word(self, off, n):
         """Read n bits (n/16 little-endian iwords), MSB-first iword order."""
@@ -408,15 +451,20 @@ class Disassembler:
         off = addr - self.base
         if off < 0 or off + 2 > len(self.data):
             return None, None, 2, None
-        g7 = self.group7(off)
-        if g7 is not None:
-            return g7, self.word(off, 32), 4, None
-        g7i = self.group7_indexed(off)
-        if g7i is not None:
-            return g7i, self.word(off, 32), 4, None
-        cb = self.condbranch(off, addr)
-        if cb is not None:
-            return cb[0], self.word(off, 32), 4, cb[1]
+        # With --upstream loaded, words the oracle-verified table finds
+        # undefined must not match our empirical special cases either
+        # (they over-match; findings/34). None means "no fallback loaded".
+        up = self.upstream_decode(off) if self.updec is not None else "off"
+        if up is not None:
+            g7 = self.group7(off)
+            if g7 is not None:
+                return g7, self.word(off, 32), 4, None
+            g7i = self.group7_indexed(off)
+            if g7i is not None:
+                return g7i, self.word(off, 32), 4, None
+            cb = self.condbranch(off, addr)
+            if cb is not None:
+                return cb[0], self.word(off, 32), 4, cb[1]
         best = None
         best_raw = None
         for nbits in (48, 32, 16):
@@ -429,6 +477,12 @@ class Disassembler:
                         best, best_raw = e, raw
                     break
         if best is None:
+            # `up` is "off" (no fallback loaded), a tuple (upstream decoded
+            # the word) or None (upstream finds it undefined). Fall back to
+            # upstream's text for our spec gaps; advance by its length, which
+            # also resynchronises the sweep past 6-byte FF00-FFEF forms.
+            if up is not None and up != "off":
+                return up[3] + "  ;upstream", self.word(off, 16), up[2], None
             raw16 = self.word(off, 16)
             return None, raw16, 2, None
         text, target = render(best, best_raw, addr)
@@ -473,10 +527,14 @@ def main():
     ap.add_argument("--end", type=lambda x: int(x, 0), default=None, help="end virtual address")
     ap.add_argument("--func", action="store_true", help="stop at first return")
     ap.add_argument("--base", type=lambda x: int(x, 0), default=LOAD_BASE)
+    ap.add_argument("--upstream", default=None, metavar="DIR",
+                    help="fallback-decode unknown words with the pi32v2-isa "
+                         "table from this repo clone (e.g. ../pi32v2-isa)")
+    ap.add_argument("--mcpu", default="r3", help="upstream -mcpu model (default r3)")
     args = ap.parse_args()
 
     data = open(args.file, "rb").read()
-    dis = Disassembler(data, base=args.base)
+    dis = Disassembler(data, base=args.base, upstream=args.upstream, mcpu=args.mcpu)
 
     if args.va is not None:
         addr = args.va

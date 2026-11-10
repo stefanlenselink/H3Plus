@@ -849,7 +849,7 @@ PC link. Reconciliation of E8→E10:
 | VA | stock | patch | meaning |
 |---|---|---|---|
 | `0x01E17974` | `0b f8 d4 94` | `00 00 00 00` | NOP the `je r11,#0x4a` dispatch branch — code `0x4a` falls through the je-chain to the default no-op (returns 0, debug-ring log only) for **every** caller, incl. any poster the E9 census missed; next insn is the chain's next `je` (fall-through safe) |
-| `0x01E173D0` | `10 04 bf ea` | `00 23 80 00` | `l2cap_disconnect()` entry no-op `mov r0,#0; rts` — kills every direct caller at once (the four SPP-SM sites + `spp_channel_disconnect` + any other); return 0 = success, callers advance while channels stay open |
+| `0x01E173D0` | `10 04 bf ea` | `00 23 80 00` | `l2cap_disconnect()` entry no-op — early return `r0=[sp+12]; rts` (mislabel corrected 2026-11-10 via [ch. 34](34-pi32v2-isa-open-reference.md): `00 23` = `r0 = [sp+0xC]`, so r0 is caller-stack garbage, NOT 0) — kills every direct caller at once (the four SPP-SM sites + `spp_channel_disconnect` + any other); callers advance while channels stay open — the return value is ignored (E11 hardware-confirmed; bytes stay as flashed) |
 
 Pointer scans: zero 32-bit LE refs to either `0x01E17B20` (walk body) or `0x01E173D0`
 (`l2cap_disconnect`) — direct calls only, no table routes. Side effects: the app can never

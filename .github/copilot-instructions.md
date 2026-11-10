@@ -1,7 +1,7 @@
 # copilot-instructions.md — TIDRADIO H3 Plus Firmware RE
 
 Instructions for AI coding agents working in this repository. Read this before making
-changes. It is distilled from `README.md`, `ARTIFACTS.md`, `findings/` (23 files),
+changes. It is distilled from `README.md`, `ARTIFACTS.md`, `findings/` (35 files),
 `tools/Tools.md`, and the verified working practices of this project.
 
 ## What this repository is
@@ -32,7 +32,7 @@ patch makes any BT headset's mic the PTT transmit source, hardware-confirmed.
 
 | Path | Contents |
 |---|---|
-| `findings/Findings.md` | **Index** of 30 numbered chapters; old §9A.x/§12A.x section numbers preserved inside chapters |
+| `findings/Findings.md` | **Index** of 34 numbered chapters; old §9A.x/§12A.x section numbers preserved inside chapters |
 | `findings/08–13-*.md` | The Bluetooth effort (§9A.1–9A.50) |
 | `findings/22-bluetooth-7-multipoint-architecture.md` | §9B: dual-device/multipoint analysis |
 | `findings/23-bluetooth-8-bt-ptt2.md` | §9C: BT-PTT2 (BT mic on VFO B) — trampoline + code cave design, **hardware-confirmed 2026-09-30** |
@@ -86,6 +86,13 @@ when relevant. GitHub anchor slugs: lowercase, punctuation dropped, spaces → d
   `0x01E75DDC` encode `(target − 0x01E75DDC)/2`. Full notes: `tools/isa/pi32v2.md`,
   findings §9A.26/§9A.50. **Validated against the official LLVM objdump (`-mcpu=r3`):
   12,786 common branch targets, 0 mismatches** (ch. 24 §24.5). ELF machine 0xF1.
+  **Re-confirmed 2026-11-10 against the open oracle-verified table
+  [`jvitkauskas/pi32v2-isa`](https://github.com/jvitkauskas/pi32v2-isa) (ch. 34): every
+  H3+ patch-site encoding correct, 0 length mismatches over 327,211 decoded words;
+  length rule = first word `<0xE000` → 2 B, `0xFF00–0xFFEF` → 6 B, else → 4 B.
+  One spelling corrected: `00 23 80 00` (`--no-l2cap-disconnect` entry no-op) is
+  `r0 = [sp+12]; rts` (early return, garbage r0 — callers ignore it), NOT
+  `mov r0,#0; rts`; true `mov r0,#0; rts` = `40 20 80 00`.**
 - **Ecosystem (ch. 24):** correct SDK is `fw-AC63_BT_SDK` `cpu/br23` (= AC635N; the
   AC630N SDK is q32s/bd29 — wrong core). SFCENC regs @`0x1F0C00` (`KEY` u16 +
   `UNENC/LENC_ADRH/L`). Full flash map: `app.bin` @`0x5100`, VM @`0xC9000` size
@@ -112,8 +119,8 @@ python tools/patch_h3plus_firmware_bluetooth.py <src> [<dst>] [--show]
     [--no-pairing-kick] # NOP reason-0x16 pairing kick @0x01E21DE4 (disconnect-ALL loop) + @0x01E21EC4 (single) via thunk 0x01E19492; E7 field-FAILED 2026-10-09 for accessory incumbent (ch.27 §27.12/§27.13)
     [--no-cleanup-kick] # NOP the three remaining 0x13-capable wrapper callers @0x01E19AD0/0x01E19B14/0x01E20AB2; E8 HW 2026-10-19 PARTIAL SUCCESS — HCI-level eviction fully dead (ch.27 §27.14/§27.15)
     [--no-l2cap-teardown] # NOP the two user_send_cmd_prepare(0x4a) L2CAP-teardown posts @0x01E61E22 (Paired->Connect UI) / 0x01E60188 (mode setter); E9 field-FAILED 2026-10-20 (close persisted) (ch.27 §27.15/§27.16)
-    [--no-spp-close]     # no-op spp_channel_disconnect() entry @0x01E173EC (mov r0,#0; rts) — E10 field-FAILED 2026-10-20 (all-channel walk bypasses it) (ch.27 §27.16/§27.17)
-    [--no-l2cap-disconnect] # NOP je r11,#0x4a dispatch branch @0x01E17974 + entry-no-op l2cap_disconnect() @0x01E173D0 (mov r0,#0; rts); E11 HW 2026-10-20 EVICTOR DEAD — new walls = pairing lockup + single-SPP-session (ch.27 §27.17/§27.18)
+    [--no-spp-close]     # no-op spp_channel_disconnect() entry after push-rets @0x01E173EE (r0=0; pc=[sp++] -> return 0) — E10 field-FAILED 2026-10-20 (all-channel walk bypasses it) (ch.27 §27.16/§27.17)
+    [--no-l2cap-disconnect] # NOP je r11,#0x4a dispatch branch @0x01E17974 + entry-no-op l2cap_disconnect() @0x01E173D0 (early return `r0=[sp+12]; rts` — r0 garbage, callers ignore; ch.34 correction); E11 HW 2026-10-20 EVICTOR DEAD — new walls = pairing lockup + single-SPP-session (ch.27 §27.17/§27.18)
     [--incoming-mode3] # R3 FIELD-FAILED: force routing byte 3 at incoming tbh (ch.30 §30.14.18-23)
     [--incoming-hfp]   # R4 FIELD-FAILED: replay user_send_cmd_prepare(1,6,joining-addr) at tbh hook 0x01E61270 + cmd-1 is_1t2 bail NOP 0x01E17A2A (ch.30 §30.14.26-28)
     [--incoming-redial] # R5 FIELD-FAILED (goal) 2026-11-03: at tbh hook 0x01E61270, byte==1 && 2 conn recs inused -> arm re-dial mailbox 0x1A5F1=joiner (byte-wise) + HCI-Disc the incoming ACL -> stack epilogue re-dials with profiles; teardown 0xF0+match -> byte:=3. Field: two-device STABLE, ZERO freezes, audio never bound to Jabra (ch.30 §30.14.29-33)
@@ -137,6 +144,16 @@ python tools/patch_h3plus_firmware_bluetooth.py <src> [<dst>] [--show]
 - **Before re-deriving anything:** check [findings/29](../findings/29-static-analysis-reference-map.md)
   first — it is the single lookup table of every SDK function VA, RAM structure and patch
   site already located (btstack/controller/app layers + wire facts).
+
+- **Open ISA reference (2026-11-10, [findings/34](../findings/34-pi32v2-isa-open-reference.md)):**
+  [`jvitkauskas/pi32v2-isa`](https://github.com/jvitkauskas/pi32v2-isa) is a CC0,
+  oracle-verified pi32v2 table (1165 forms, 1079 hardware-confirmed on AC791N,
+  `-mcpu=r3` — our CPU model). It resolves nearly all `???` entries of
+  `tools/isa/pi32v2.md` (6-byte `FF00–FFEF` compare-branches, `if (...) {` blocks,
+  hw `div.u/s.rrr`, 32-bit stack ld/st, SFR `rmw.*`, named DSP group). Cross-check
+  with `python3 tools/isa_xcheck.py work/app_dec.bin`; decode the gaps with
+  `tools/pi32dis.py --upstream=../pi32v2-isa` (additive fallback, marked `;upstream`).
+  Caveat: hardware facts are AC791N, unmeasured on our BR23 die.
 
 - `work/full.lst` (user-generated, 19.5 MB) is the v1.0.50 disassembly; format:
   `01E00000  3e 58  [005000]  mnemonic`. Regenerate with `tools/pi32dis.py`.
@@ -229,7 +246,7 @@ scripts here, and none should be added.
   working device. Record the rollback **recipe** in findings instead: base image +
   exact sector list + byte counts, nothing more.
 
-## Current state & open frontiers (as of 2026-10-29)
+## Current state & open frontiers (as of 2026-11-10)
 
 Done: both ciphers broken · classifier decoded · routing modes 1–6 mapped · key-remap
 patches HW-confirmed (BT-mic PTT, duplex) · patch tool + 2 test suites green ·
@@ -244,7 +261,13 @@ its "`[1 x conn_info]` data model" root cause was **corrected 2026-10-06**: our 
 has 2 conn slots; the wall is the controller library, ch. 27) · **eviction decision located 2026-10-04** (ch. 26): app-level
 kick `0x01E5B22A` posts cmd 5 to the controller-queue relay `0x01E22890` (sole
 HCI-Disconnect executor `0x01E074DE`, reason 19); the stack never evicts; 4-byte
-kick-NOP experiment + options analysis in ch. 26 §26.7.
+kick-NOP experiment + options analysis in ch. 26 §26.7 · **open ISA reference adopted
+2026-11-10** (ch. 34): [`jvitkauskas/pi32v2-isa`](https://github.com/jvitkauskas/pi32v2-isa)
+CC0 oracle-verified table cross-checked against all our hand encodings (0 length
+mismatches over 327,211 words; one `00 23` spelling corrected) + new
+`tools/isa_xcheck.py` + `pi32dis.py --upstream` gap fallback; its LLVM fork
+(`pi32v2-llvm`, releases `pi32v2-23.1.5-5`, reads JieLi LLVM-4 bitcode 4898/4900)
+supercharges the ch. 25 compile route and ch. 28 SDK rebuild.
 
 Open (in priority order):
 1. ~~Hardware-validate BT-PTT2~~ ✅ **PASSED 2026-09-30** (ch. 23 §9C.8): flashed
@@ -396,7 +419,7 @@ Open (in priority order):
    (`0x01E20BD2`/`0x01E20E92` → `FUN_01e21af8` case `0xB` → `0x01E1786C`). The dependence is
    on target **profile**, not class (SPP targets close the incumbent's SPP channel; HFP never
    touches it — E6); `0x4a` was a co-actor. **E10 SHIPPED as `--no-spp-close`** (entry no-op
-   `mov r0,#0; rts` @`0x01E173EE`; 4 bytes; **ONE sector `0x01C000`**; pairings survive;
+   `r0=0; pc=[sp++]` @`0x01E173EE` (after `push rets` -> return 0); 4 bytes; **ONE sector `0x01C000`**; pairings survive;
    suites green, all thirteen sites verified). **NEXT: E10 HW test** T1 = repeat V2b under
    btmon (expect NO L2CAP Disconnection Request, PC alive; TID-PTT SPP bind = candidate next
    wall, single-SPP-session `0x1A740`); E11 fallback = NOP the 4 SPP-SM `FUN_01e173d0` calls
@@ -408,7 +431,7 @@ Open (in priority order):
    `0x01E17974` nor the four direct `l2cap_disconnect` callers. (TID-PTT did pair+join but its
    key-presses never arrived = the single-SPP-session wall `0x1A740` already visible.)
    **E11 SHIPPED as `--no-l2cap-disconnect`** (NOP je-branch `0x01E17974` + entry-no-op
-   `l2cap_disconnect()` `0x01E173D0` `mov r0,#0; rts`; 8 bytes; **ONE sector `0x01C000`**;
+   `l2cap_disconnect()` `0x01E173D0` `r0=[sp+12]; rts` early return (r0 garbage, callers ignore — ch. 34 correction); 8 bytes; **ONE sector `0x01C000`**;
    pairings survive; suites green, all fifteen sites verified). **NEXT: E11 HW test** T1 =
    repeat V2b under btmon (expect NO L2CAP Disconnection Request at all, PC alive; TID-PTT
    SPP bind = candidate next wall); E12 fallback = gate the `l2cap_run` state-`0xd` send.
