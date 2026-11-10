@@ -264,8 +264,106 @@ an empirical guess in `tools/isa/pi32v2.md`:
   patch tool, verify suites, Tools.md, ch. 27/29, Findings index, copilot-instructions.
 - `tools/isa/pi32v2.md` annotated with an upstream-reference section (table itself
   unchanged so the runtime parser is unaffected).
+- **Corrected full listing**: `work/full_upstream.lst` — 311,921 lines regenerated with
+  `pi32dis.py --upstream=../pi32v2-isa` (20,463 `;upstream` fallback decodes, 0 errors;
+  the user's `work/full.lst` untouched) + census output `work/xcheck_census.txt` (§34.14).
 
-## 34.12 References
+## 34.12 Re-verification of the ch. 30/31 analysis sites (2026-11-10)
+
+With the `--upstream` fallback in place, every function the ch. 30/31 R-series
+analysis relied on was re-disassembled and diffed (default decode vs upstream):
+
+- **Desync evidence**: across 13 critical windows, 283 text-diffs and **411
+  boundary-diffs** — the old `pi32dis`/`work/full.lst` streams advanced 2 bytes
+  at every word our spec missed (6-byte `FF00–FFEF` compare-branches, mask
+  branches `if ((rN & m) op 0) goto`, `if (...) {` blocks, `insert`/`uextra`,
+  `callns`, long stack ld/st), so everything after the first gap in each
+  function was misaligned garbage in the old listings.
+- **The Phase A bind-block decode SURVIVES**: the window `0x01E61292–0x01E612FC`
+  (bind block: `b[0xB10+base]=120`, addr-copy `[sp+16]→[sp+12]`, free
+  `[0x102F0+0x280]`, `is_current_device` call, state `|=5`) decodes **identically**
+  in both modes. R7's field failure was a real architectural wall, not a decode
+  artifact. The two abort branches after `is_current_device`
+  (`if (r0 == 2) goto +2740` @`0x01E612C2`, `if ((r0 & 0x1) != 0) goto +2724`
+  @`0x01E612D2`) were known from Ghidra but show as `.word`/`bkpt`/`idle`
+  garbage in the old pi32dis stream — confirming Ghidra (not pi32dis) was the
+  sound authority for that decode.
+- **NEW control flow into the R-series redial heartland** (old xref saw ZERO
+  incoming edges, upstream resolves them — all masked-branch forms our spec
+  lacked):
+  - `0x01E22348 if ((r0 & 0xFF) != 0) goto −1288` → **cmd-1 dial body
+    `0x01E21E46`** — the dispatcher epilogue's 6-byte OR-fold of the re-dial
+    mailbox (`r1 = b[++r0=209]` = `r14+0xD1`..`+0xD6`, parallel-`#` fold)
+    branching to the dial. This is exactly the R5 mechanism — statically
+    CONFIRMED by upstream (R6a's field-proven firing agrees).
+  - `0x01E21D5C if ((r0 & 64) != 0) goto 230` → **cmd-1 dial body** — a SECOND,
+    previously-unknown dial gate: bit 6 of `b[r12+0x15]` (event record byte)
+    sends the dispatcher straight to the mailbox dial.
+  - `0x01E21D6E if ((r0 & 0x20) == 0) { r2 = r14+0xD1; r2 = r14+0x13A; r0 = 1;
+    r1 = 6; call 0x01E1792E }` — a DIRECT cmd-1 post selecting a **second
+    mailbox at `r14+0x13A`** (dispatcher base `0x1A520` → `0x1A65A`); the
+    `0xD1` write is dead code inside the block.
+  - `0x01E21BE0 if ((r1 & 0x38) == 0) goto 1864` → epilogue `0x01E2232E`.
+- **The reason-`0x16` pairing-kick loop is now FULLY visible** (`0x01E21DAE–
+  0x01E21DF8`): `if (r6 != 74)` gate, walk conn records `r14+0x9E`→`r14+0xD0`
+  stride `0x1C`, assemble BD_ADDR words via `insert` (the byte-assembly forms
+  our spec lacked), test **bit 29** (`r8 & 0x20000000` = the §27 inused flag),
+  `h[r6] != 0` → `r1 = 0x16; call 0x01E19492` (the `--no-pairing-kick` site
+  `0x01E21DE4`). Also `r13 = 0x102F0` (app device struct) loaded inside the
+  stack dispatcher @`0x01E21D84`.
+- **Verdict**: the R-series conclusions stand (bind wall real, six levers
+  exhausted for correct reasons), but every "sole caller/sole writer" claim in
+  the dispatcher region was an UNDERCOUNT by the old xref tooling and must be
+  re-derived on the corrected decode before further redial work. The newly
+  visible bit-6 dial gate and the `r14+0x13A` second mailbox are fresh,
+  grounded R8 candidates.
+
+## 34.14 Corrected-decode xref census (2026-11-10)
+
+With `work/full_upstream.lst` regenerated (§34.11), the ch. 30 xref questions were
+re-run against the corrected decoder (script output: `work/xcheck_census.txt`,
+old-vs-upstream counts):
+
+- **Callers into every key site are UNCHANGED except two.** Disconnect wrapper
+  `0x01E07B08` 4=4, page guard `0x01E16824` 12=12, find-conn `0x01E17420` 10=10,
+  `spp_connect` `0x01E1750C` 2=2, conn dispatcher `0x01E1792E` 83=83, kick thunk
+  `0x01E19492` 5=5, app kick `0x01E5B22A` 2=2, `is_current_device` `0x01E184D6` 1=1,
+  tbh hook `0x01E61270` 2=2, bind block `0x01E61292` 1=1. The sites that showed
+  old=0→up=0 (stack dispatcher `0x01E21AF8`, outgoing connect `0x01E60114`, mode
+  setter `0x01E60188`, UI connect `0x01E61E22`, classifier `0x01E7EC28`) are
+  pointer-table callbacks — unchanged, `tools/findva.py` remains the way in.
+- **cmd-1 dial body `0x01E21E46`: old=0 → up=2.** Two hidden entries the old listing
+  could not see: `0x01E21D5C if ((r0 & 64) != 0) goto 230` (gate = **bit 6 of
+  `b[r12+0x15]`**) and `0x01E22348 if ((r0 & 0xFF) != 0) goto −1288` (the R5/R6a
+  epilogue fold path — confirms the re-dial mechanism end to end).
+- **Dispatcher epilogue `0x01E2232E`: old=0 → up=1** (`0x01E21BE0 if ((r1 & 0x38) == 0)
+  goto 1864`).
+- **Mailbox2 `0x1A65A` (= dispatcher base `0x1A520` + `0x13A`)** — a SECOND address
+  mailbox, invisible in the old listings:
+  - gated WRITER @`0x01E219A4–0x01E219B4`: `r6 = b[r2+0x4]; …; if (r6 == 0) { … r3 =
+    r1 + 0x13A; b[r3++=r10] = r2; rep 0x2 0x5 { … } }` — gated on `b[r2+4] & 0x40`,
+    copies the address bytes into `base+0x13A` with a `rep` loop.
+  - direct cmd-1 POST @`0x01E21D66–0x01E21D7E`: `r0 = b[r12 + 0x10]; if ((r0 & 0x20)
+    == 0) { … r2 = r14 + 0x13A; r10 = r2 + −0xEC0; r0 = 1; r1 = 6; call 0x01E1792E }`
+    — gated on **bit 5 of `b[r12+0x10]`**, posts `user_send_cmd_prepare(1, 6,
+    mailbox2)` — a radio-originated dial whose address operand is mailbox2, NOT the
+    `0x1A5F1` mailbox the R5/R6b/R7 designs armed.
+- **Mailbox `0x1A5F1` refs**: old=13 → up=17; the 4 new hits are the epilogue fold
+  `0x01E22330 r1 = b[++r0=209] (u)` (known, now visible) + three weak DSP/data-region
+  coincidences (`0x01E9987E`, `0x01EBF9DC/E`).
+- **Struct `0x102F0`**: 810 refs old = 810 refs upstream — the app-side reference set
+  was already complete; the decode gaps did NOT hide any current-device references.
+
+**Verdict.** The R-series conclusions stand (bind decode §34.12, all edge counts,
+`0x102F0` reference set). What the corrected decode adds is a fresh static lead for
+R8: the stack keeps a second dial mailbox `0x1A65A` with its own gated fill
+(`b[r2+4] & 0x40`) and its own gated cmd-1 post (`b[r12+0x10] & 0x20`), plus a
+bit-6-of-`b[r12+0x15]` gate directly into the dial body — none of these were
+addressable from the old listings, and the R5-lineage designs never armed mailbox2.
+Any R8 design must consider BOTH mailboxes and the three gate bits
+(`b[r2+4]&0x40`, `b[r12+0x10]&0x20`, `b[r12+0x15]&0x40`).
+
+## 34.15 References
 
 - <https://github.com/jvitkauskas/pi32v2-isa> — the open pi32v2 ISA reference
   (table CC0-1.0, code MIT-0); docs read: `ISA.md`, `ABI.md`, `COMPILER.md`,

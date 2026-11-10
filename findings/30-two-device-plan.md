@@ -3766,4 +3766,17 @@ achievable as written**: a full app rebuild = re-implementing the transceiver.
 Status 2026-11-06: scope check DONE; feasibility build = next action; nothing
 flashed; radio on R7 `575e593d…`.
 
+### §30.14.46 — corrected-decode xref census 2026-11-10 (upstream ISA table): R-series stands, R8 lead = mailbox2
+
+Re-ran the xref census over the whole app with the upstream oracle-verified decode
+(`tools/pi32dis.py --upstream`, [Ch. 34 §34.14](34-pi32v2-isa-open-reference.md),
+listing `work/full_upstream.lst`): every ch. 30/31 caller count and the 810 refs to
+struct `0x102F0` are **UNCHANGED** — the R-series conclusions stand. Two facts the
+old desynced listing hid: the cmd-1 dial body `0x01E21E46` has a SECOND entry —
+gate `0x01E21D5C` (`if ((r0 & 64) != 0)`, bit 6 of `b[r12+0x15]`) — and there is a
+**second re-dial mailbox `0x1A65A`** (dispatcher base `0x1A520+0x13A`) with its own
+gated writer `0x01E219A4` (gate `b[r2+4] & 0x40`) and a direct cmd-1 post path
+`0x01E21D66` (gate bit 5 of `b[r12+0x10]`). R5-lineage designs armed only `0x1A5F1`.
+Any R8 must consider BOTH mailboxes + the three gate bits before touching flash.
+
 *[<< Index](Findings.md)* · [Ch. 29 (address map)](29-static-analysis-reference-map.md) · [Ch. 27 (E1–E11 log)](27-firmware-2slot-stack-controller-wall.md) · [Ch. 28 (SDK route)](28-sdk-forks-survey.md) · [Ch. 23 (BT-PTT2 validation)](23-bluetooth-8-bt-ptt2.md) · [Ch. 18 (priorities)](18-open-questions-next-steps.md)

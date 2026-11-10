@@ -155,6 +155,17 @@ python tools/patch_h3plus_firmware_bluetooth.py <src> [<dst>] [--show]
   `tools/pi32dis.py --upstream=../pi32v2-isa` (additive fallback, marked `;upstream`).
   Caveat: hardware facts are AC791N, unmeasured on our BR23 die.
 
+- **MANDATORY SECOND OPINION (user directive, 2026-11-10):** every NEW cave body,
+  trampoline, patch encoding or hand-written instruction sequence must be verified
+  against the upstream oracle table BEFORE flashing - run the bytes through
+  `python3 -m pi32v2isa disasm <hex>` (or `tools/pi32dis.py --upstream=../pi32v2-isa`
+  on a staged image) and confirm the decode matches intent, instruction lengths and
+  re-entry alignment. Reason: our hand spec has ~23k-word decode gaps and 6-byte
+  `FF00-FFEF` forms that desynced old listings and silently corrupted xref
+  conclusions ([findings/34 SS34.2, SS34.12](../findings/34-pi32v2-isa-open-reference.md));
+  a cave that lands on a form our table misses decodes as garbage in `work/full.lst`
+  yet runs fine - only the upstream table shows the truth.
+
 - `work/full.lst` (user-generated, 19.5 MB) is the v1.0.50 disassembly; format:
   `01E00000  3e 58  [005000]  mnemonic`. Regenerate with `tools/pi32dis.py`.
 - `tools/xref.py <img> <VA>` decodes call/goto xrefs; **callback functions have zero
