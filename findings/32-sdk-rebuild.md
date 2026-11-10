@@ -666,6 +666,8 @@ Q4 Alias stock / Q5 Firmware Ver **V1.0.50-BT**). **Field verdict 2026-11-09: PA
 - 2026-11-10: ch. 33 P9 retry FIELD-FAILED (menu Connect locks radio with link up) —
   the dial-path eviction posts are load-bearing state cleanup ⇒ NOP-the-eviction route
   DEAD (findings/33 §33.9). Next: Card P10 zero-patch dial seesaw on S1 base.
+- 2026-11-10 (late): operator safety-reset radio to PURE STOCK v1.0.50 (full 1 MiB `write 0x00000000 Dumps/dump_internal.bin`, VM incl.; all devices re-pair). P9 undo via baseline-dependent sector export lesson → S1 re-exported vs stock: `work/ch32_bt_e7_stock_sectors/` (15 sectors, image sha `d7a29a3e` unchanged), stage `work/ch32_bt_e7stock.sh`. Ch. 33 S2 continues from stock base.
+
 ## §32.10 — Bootloader-entry incident (2026-11-07, radio on P1 SDK image)
 
 **Symptom.** With the P1 SDK demo app running, "hold PTT + `3`, power on" (and the

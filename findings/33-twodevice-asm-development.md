@@ -287,3 +287,27 @@ PASS = both up + Jabra audio + button keys => goal state via PROCEDURE on the st
 S1 image; automation (auto re-dial at bind-complete via cave) becomes S2c polish.
 FAIL modes are diagnostic: 5 kills Jabra => 0x4A hits HFP harder than E6 suggested;
 audio moves to button after 5 => bind-block re-runs per dial, need name-guarded bind skip.
+
+## §33.10 — Radio reverted to PURE STOCK; S1-vs-stock flash staged (2026-11-10)
+
+Operator safety-reset the radio by writing the FULL stock image himself
+(`JL: write 0x00000000 Dumps/dump_internal.bin`, 1 MiB incl. VM): radio now runs
+**pure stock v1.0.50** with the old pairing data from that dump — all devices must be
+re-paired. The stock OEM app restores the PTT+3 SCSI download-mode combo.
+
+`work/ch32_bt_e7fix.sh` (3 sectors, exported vs the P9 baseline) is NOT usable from
+stock — sector exports are baseline-dependent (§33.9 gotcha). Re-exported the SAME
+deterministic S1 image (`work/ch32_bt_e7.bin` sha256 `d7a29a3eaeffbe67…`) against the
+stock baseline:
+
+```bash
+CUR_RADIO=$PWD/Dumps/dump_internal.bin python3 work/ch32_p2_pack.py \
+  /tmp/opencode/rtasm/bte7_plain.bin work/ch32_bt_e7.bin work/ch32_bt_e7_stock_sectors bte7stock
+```
+
+→ **15 differing sectors** `0x1C000,0x1D000,0x1F000,0x26000,0x57000,0x60000,0x7A000,
+0x7E000,0x83000,0x93000,0xA0000,0xA1000,0xAC000,0xC2000,0xC4000` exported to
+`work/ch32_bt_e7_stock_sectors/`; packager asserts (uboot region, device bytes) pass
+(dump_internal's `0xC8FE0` bytes identical to dump_pre_ch30, §32.11 inventory).
+Stage script **`work/ch32_bt_e7stock.sh`** (from the e7fix template; `bash -n` OK)
+flashes S1 onto stock; afterwards run **Card P10** (§33.9) on the restored S1 base.
