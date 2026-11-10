@@ -1905,6 +1905,37 @@ assert _g2[0] & 0xC0 == 0xC0 and _g2[1] == 0xEA  # goto32 shape
 assert decode_call(INCHRDL_CUR_CAVE_VA + 86,
                    bytes([_g2[0] & ~0x40]) + _g2[1:]) == 0x01E61292
 
+# --redial-appswap  (ch. 30 SS30.14.47, R8): R7 ran the stock bind block yet
+# audio never bound (6th identical goal-miss). Statics located the app's own
+# device record: _DAT_00010372 (0x102F0+0x82, connection handle) is written
+# ONLY by the app 0x3e connect-complete event sink FUN_01e5af40 (and zeroed
+# by its teardown); a stack-originated redial evidently never delivers it,
+# so the app audio path kept handle 0/stale and cmd 0x1E bound nothing.
+# R8 = R7 + the app-slot swap: same 74 B prefix, then `call 0x01E16E0E`
+# (current conn-record handle u16, 0 if none), guard `if (r0 == 0) goto
+# tail`, `r3 = 0x102F0`, `h[r3+130] = r0` (stamp the joiner's handle into
+# the app device record), then R7's bind tail (b[0xB464] := 3, payload
+# synth, goto 0x01E61292). DAT_0000b463 (0x3e's connected flag) dropped:
+# write-only, no readers. 106 B, ends 0x01EA783A (cave run ends
+# 0x01EA7849). Every byte verified against the upstream oracle table
+# (MANDATORY SECOND OPINION, ch. 34/35); the tail goto32 is RE-ENCODED for
+# the +16 shift (R7's bytes would land at 0x01E612A2 - caught by the gate).
+INCHRDL_APPSWAP_BYTES = bytes.fromhex(
+    "0225c0fff1a501004120810781078107810781078107c0ff41bf000023078307"
+    "2307830723078307230783072307830723078307c1ff3abf000050ee1000c2ff"
+    "40000000201952ee1000bbeaf87a0045c3fff002010050ed3308412352ee641d"
+    "022582238224fdea2ccd")
+assert len(INCHRDL_APPSWAP_BYTES) == 106
+assert INCHRDL_APPSWAP_BYTES[:74] == INCHRDL_CUR_BYTES[:74]
+assert decode_call(INCHRDL_CUR_CAVE_VA + 74,
+                   INCHRDL_APPSWAP_BYTES[74:78]) == 0x01E16E0E
+assert INCHRDL_APPSWAP_BYTES[78:80] == b"\x00\x45"   # if (r0 == 0) goto +10
+assert INCHRDL_APPSWAP_BYTES[80:90] == bytes.fromhex("c3fff002010050ed3308")
+_a_tail = INCHRDL_APPSWAP_BYTES[102:106]
+assert _a_tail[0] & 0xC0 == 0xC0 and _a_tail[1] == 0xEA  # goto32 shape
+assert decode_call(INCHRDL_CUR_CAVE_VA + 102,
+                   bytes([_a_tail[0] & ~0x40]) + _a_tail[1:]) == 0x01E61292
+
 # The cmd5target hook overwrites the low half of the cmd5handle site, so
 # teach that state table (and thus find_app_start/--show) about it.
 CMD5HANDLE_STATES["target"] = CMD5T_HOOK[:2]
@@ -2160,7 +2191,8 @@ def build_patches(duplex_mode=4, ptt2_action="PTT2", odptt_action="OD-PTT",
                   cmd5_target=False, d1_target_wait=False,
                   incoming_mode3=False, incoming_hfp=False,
                   incoming_redial=False, redial_bind=False,
-                  redial_current=False, redial_bind2=False):
+                  redial_current=False, redial_bind2=False,
+                  redial_appswap=False):
     """Return the patch table, with the `duplex` patch's target selected by
     `duplex_mode` (see DUPLEX_LABELS) and the `pflabels` multi-patch built
     for the (--PTT2, --OD-PTT) action pair (see PF_COMBO_PATCHES). The
@@ -2648,21 +2680,27 @@ def build_patches(duplex_mode=4, ptt2_action="PTT2", odptt_action="OD-PTT",
     _ird_w = len(INCHRDL_CAVE_BYTES)
     _ird_cur = bool(incoming_redial and redial_current)
     _ird_bind2 = bool(incoming_redial and redial_bind2)
+    _ird_appswap = bool(incoming_redial and redial_appswap)
+    if _ird_appswap:
+        _ird_bind2 = False
     if _ird_bind2:
         _ird_cur = False
     _ird_bind = bool(incoming_redial and redial_bind and not _ird_cur
-                     and not _ird_bind2)
-    _ird_new = (INCHRDL_CAVE_BYTES_CUR if (_ird_cur or _ird_bind2)
+                     and not _ird_bind2 and not _ird_appswap)
+    _ird_new = (INCHRDL_CAVE_BYTES_CUR if (_ird_cur or _ird_bind2 or
+                                        _ird_appswap)
                 else INCHRDL_CAVE_BYTES_BIND if _ird_bind
                 else INCHRDL_CAVE_BYTES if incoming_redial
                 else b"\x00" * _ird_w)
-    _ird_state = ("inchrdlcur" if (_ird_cur or _ird_bind2)
+    _ird_state = ("inchrdlcur" if (_ird_cur or _ird_bind2 or
+                              _ird_appswap)
                   else "inchrdlbind" if _ird_bind
                   else "inchrdlcave" if incoming_redial else "native")
     patches["inchrdlcave"] = {
         "desc": "code cave @0x%08X: R5 incoming kick+redial%s"
                 % (INCHRDL_CAVE_VA,
-                   " (R7 bind2)" if _ird_bind2
+                   " (R8 appswap)" if _ird_appswap
+                   else " (R7 bind2)" if _ird_bind2
                    else " (R6b current)" if _ird_cur
                    else " (R6a bind)" if _ird_bind else ""),
         "va": INCHRDL_CAVE_VA,
@@ -2694,7 +2732,7 @@ def build_patches(duplex_mode=4, ptt2_action="PTT2", odptt_action="OD-PTT",
     # with --redial-current: --cmd5-target's presstcave/d1thunk, R3's and
     # R4's caves) are taught as recognition-only states, and the legacy
     # sites learn the CUR payload below the teaching loop.
-    _ic_w = len(INCHRDL_CUR_BYTES)
+    _ic_w = len(INCHRDL_APPSWAP_BYTES)   # 106: R8 needs +16 past R7's end
     _ic_off_p = PRESST_CAVE_VA - INCHRDL_CUR_CAVE_VA            # 0
     _ic_off_d = D1_THUNK_CAVE_VA - INCHRDL_CUR_CAVE_VA          # 32
     _ic_off_m = INCMODE3_CAVE_VA - INCHRDL_CUR_CAVE_VA          # 38
@@ -2707,11 +2745,13 @@ def build_patches(duplex_mode=4, ptt2_action="PTT2", odptt_action="OD-PTT",
         "desc": "code cave @0x%08X: R6b current-device + name replay / R7"
                 " direct bind" % INCHRDL_CUR_CAVE_VA,
         "va": INCHRDL_CUR_CAVE_VA,
-        "new": (INCHRDL_BIND2_BYTES if _ird_bind2
+        "new": (INCHRDL_APPSWAP_BYTES if _ird_appswap
+                else INCHRDL_BIND2_BYTES if _ird_bind2
                 else INCHRDL_CUR_BYTES if _ird_cur else b"\x00" * _ic_w),
         "states": {"native": b"\x00" * _ic_w,
-                   "inchrdlcur": INCHRDL_CUR_BYTES,
-                   "inchrdlbind2": INCHRDL_BIND2_BYTES,
+                   "inchrdlcur": INCHRDL_CUR_BYTES + b"\x00" * 16,
+                   "inchrdlbind2": INCHRDL_BIND2_BYTES + b"\x00" * 16,
+                   "inchrdlappswap": INCHRDL_APPSWAP_BYTES,
                    "legacy_presst": _ic_win(PRESST_CAVE_BYTES, _ic_off_p),
                    "legacy_d1": _ic_win(D1_THUNK_CAVE_BYTES, _ic_off_d),
                    "legacy_presst_d1": _ic_win(
@@ -2725,6 +2765,10 @@ def build_patches(duplex_mode=4, ptt2_action="PTT2", odptt_action="OD-PTT",
                    "inchrdlbind2": "guard hit: zero 0x1A5F1, 0xBF41..46=joiner,"
                                    " b[0xBF3A]|=0x40, byte:=3, goto bind block"
                                    " 0x01E61292 (R7)",
+                   "inchrdlappswap": "guard hit: zero 0x1A5F1, 0xBF41..46="
+                                    "joiner, b[0xBF3A]|=0x40, h[0x10372]=cur"
+                                    "-record handle (APP SLOT SWAP), byte:="
+                                    "3, goto bind block 0x01E61292 (R8)",
                    "legacy_presst": "R1-e presstcave occupies this window "
                                     "(mutually exclusive)",
                    "legacy_d1": "D1 slot-check thunk occupies this window "
@@ -3000,6 +3044,14 @@ def build_patches(duplex_mode=4, ptt2_action="PTT2", odptt_action="OD-PTT",
         patches[_cu_name]["states"]["inchrdlbind2"] = _cb_s
         patches[_cu_name]["labels"]["inchrdlbind2"] = (
             "R7 --redial-bind2 bind cave occupies this window "
+            "(mutually exclusive)")
+        # R8 --redial-appswap shares the window too (106 B).
+        _ca_s = INCHRDL_APPSWAP_BYTES[_cu_off:_cu_off + _cu_w]
+        if len(_ca_s) < _cu_w:
+            _ca_s += b"\x00" * (_cu_w - len(_ca_s))
+        patches[_cu_name]["states"]["inchrdlappswap"] = _ca_s
+        patches[_cu_name]["labels"]["inchrdlappswap"] = (
+            "R8 --redial-appswap cave occupies this window "
             "(mutually exclusive)")
     for name, (va, ctx_va, ctx_hex, native, spp, what) in KEYCODE_PATCHES.items():
         states = {"native": bytes([0x48, native]), "spp": bytes([0x48, spp])}
@@ -3915,6 +3967,25 @@ def main():
         "of an app-originated connect (the only flow ever observed "
         "binding audio, S5b/P6). Name replay dropped.",
     )
+
+    ap.add_argument(
+        "--redial-appswap",
+        dest="redial_appswap",
+        action="store_true",
+        help="MULTIPOINT R8 (EXPERIMENTAL / UNTESTED, ch. 30 SS30.14.47): "
+        "requires --incoming-redial; replaces --redial-bind2 (R7 "
+        "field-FAILED: stock bind block ran, audio never bound). Statics: "
+        "the app device record _DAT_00010372 (0x102F0+0x82 handle) is "
+        "written ONLY by the app 0x3e connect-complete sink FUN_01e5af40; "
+        "the stack-originated redial never delivers it, so the app audio "
+        "path kept a stale/zero handle and cmd 0x1E bound nothing. R8 = R7 "
+        "+ app-slot swap: same 74 B prefix, then call 0x01E16E0E (current "
+        "conn-record handle), guard if (r0 == 0) skip, r3 = 0x102F0, "
+        "h[r3+130] = r0 (stamp joiner handle into the app record), then "
+        "R7's bind tail (b[0xB464] := 3, payload synth, goto 0x01E61292). "
+        "106 B window 0x01EA77D0..0x01EA783A, every byte verified against "
+        "the upstream oracle table.",
+    )
     ap.add_argument(
         "--no-cleanup-kick",
         dest="no_cleanup_kick",
@@ -4115,6 +4186,24 @@ def main():
             "contains the D1 slot-check thunk cave (0x01EA77F0); they "
             "cannot be combined."
         )
+    if args.redial_appswap and not args.incoming_redial:
+        raise SystemExit(
+            "--redial-appswap modifies the --incoming-redial cave (R8) "
+            "and adds its CUR window; pass --incoming-redial too."
+        )
+    if args.redial_appswap and (args.redial_bind or args.redial_current
+                                or args.redial_bind2):
+        raise SystemExit(
+            "--redial-appswap (R8), --redial-bind2 (R7), --redial-bind "
+            "(R6a) and --redial-current (R6b) all retarget the "
+            "--incoming-redial loop guard; pick one."
+        )
+    if args.redial_appswap and args.d1_target_wait:
+        raise SystemExit(
+            "--redial-appswap's window (0x01EA77D0..0x01EA783A) contains "
+            "the D1 slot-check thunk cave (0x01EA77F0); they cannot be "
+            "combined."
+        )
 
     PATCHES = build_patches(args.bluetooth_mode, a7, a8, args.conn_num,
                             args.no_kick, args.force_page_scan,
@@ -4128,7 +4217,8 @@ def main():
                             args.incoming_mode3,
                             args.incoming_hfp,
                             args.incoming_redial, args.redial_bind,
-                            args.redial_current, args.redial_bind2)
+                            args.redial_current, args.redial_bind2,
+                            args.redial_appswap)
 
     raw, app, app_start = load_app(args.src)
     print("source: %s (%d bytes)" % (args.src, len(raw)))
@@ -4177,6 +4267,8 @@ def main():
         extra += " --redial-current (multipoint R6b)"
     if args.redial_bind2:
         extra += " --redial-bind2 (multipoint R7)"
+    if args.redial_appswap:
+        extra += " --redial-appswap (multipoint R8)"
     print("configuration: --bluetooth-mode %d --PTT=%s --PTT2=%s --OD-PTT=%s%s\n"
           % (args.bluetooth_mode, ptt_action, a7, a8, extra))
 
@@ -4240,6 +4332,8 @@ def main():
     if args.redial_current:
         wanted += ["inchrdlcurcave"]
     if args.redial_bind2:
+        wanted += ["inchrdlcurcave"]
+    if args.redial_appswap:
         wanted += ["inchrdlcurcave"]
     wanted = list(dict.fromkeys(wanted))
     if ({"pfbody7", "pfbody8", "pfrelease", "pflabels"} & set(wanted)

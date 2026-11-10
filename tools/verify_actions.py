@@ -1150,6 +1150,45 @@ if cp.returncode == 0:
     ck(cp2.returncode == 0 and "Nothing to do" in cp2.stdout,
        "--redial-bind idempotent")
 
+# --- ch.30 R8 redial-appswap: app-slot swap before bind (2026-11-10) -------
+r8i = os.path.join(OUTDIR, "r8.bin")
+cp = run(SRC, r8i, "--only", "inchrdl", "--only", "inchrdlcave",
+         "--only", "inchrdlcurcave",
+         "--incoming-redial", "--redial-appswap")
+ck(cp.returncode == 0, "--incoming-redial --redial-appswap build")
+if cp.returncode == 0:
+    a = dec(r8i)
+    ck(g(a, P.INCHRDL_HOOK_VA, 4) == P.INCHRDL_HOOK
+       and g(a, P.INCHRDL_CAVE_VA, len(P.INCHRDL_CAVE_BYTES_CUR))
+       == P.INCHRDL_CAVE_BYTES_CUR
+       and g(a, P.INCHRDL_CUR_CAVE_VA, len(P.INCHRDL_APPSWAP_BYTES))
+       == P.INCHRDL_APPSWAP_BYTES,
+       "R8 hook + guard + appswap window written")
+    ck(len(P.INCHRDL_APPSWAP_BYTES) == 106
+       and P.INCHRDL_APPSWAP_BYTES[:74] == P.INCHRDL_CUR_BYTES[:74],
+       "R8 shares the R6b/R7 74 B prefix (mailbox zero + current-device)")
+    ck(P.decode_call(P.INCHRDL_CUR_CAVE_VA + 74,
+                     P.INCHRDL_APPSWAP_BYTES[74:78]) == 0x01E16E0E
+       and P.INCHRDL_APPSWAP_BYTES[78:80] == b"\x00\x45",
+       "R8 calls 0x01E16E0E (current-record handle) + guard if (r0 == 0)")
+    ck(P.INCHRDL_APPSWAP_BYTES[80:90]
+       == bytes.fromhex("c3fff002010050ed3308"),
+       "R8 stamps h[0x102F0+0x82] = handle (app device record swap)")
+    ck(P.decode_call(P.INCHRDL_CUR_CAVE_VA + 102,
+                     bytes([P.INCHRDL_APPSWAP_BYTES[102] & ~0x40])
+                     + P.INCHRDL_APPSWAP_BYTES[103:106]) == 0x01E61292,
+       "R8 tail goto32 lands on bind block 0x01E61292")
+    ck(P.INCHRDL_CUR_CAVE_VA + 106 <= 0x01EA7849,
+       "R8 window fits the verified ALLZERO cave run")
+    cp = run(r8i, "--show", "--incoming-redial", "--redial-appswap")
+    ck(cp.returncode == 0 and "UNKNOWN" not in cp.stdout
+       and "MIXED" not in cp.stdout, "--show on R8 image clean")
+    cp2 = run(r8i, r8i + ".2", "--only", "inchrdl", "--only", "inchrdlcave",
+              "--only", "inchrdlcurcave",
+              "--incoming-redial", "--redial-appswap")
+    ck(cp2.returncode == 0 and "Nothing to do" in cp2.stdout,
+       "--redial-appswap idempotent")
+
 # --- cleanup ----------------------------------------------------------------
 if not fail and not KEEP:
     shutil.rmtree(OUTDIR)

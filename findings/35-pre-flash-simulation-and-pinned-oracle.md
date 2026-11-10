@@ -149,6 +149,12 @@ checked **before flashing** by: (1) the upstream table decode (§34,
 the patch overlay + `--expect` assertions pre-flash, (3) `tools/jl_oracle.py site` once
 the pinned toolchain is fetched, for the JieLi-authority length/alignment/decode verdict.
 
+## 35.9 Strategic: does the open toolchain re-open the C-source route? (2026-11-10)
+
+- **Ghidra-C round-trip: NO.** ch. 32's 4 field-dead splices died at the *decompiler* (ghidra-jieli is 'very early stage' even in upstream's own SOURCES); the open LLVM fork replaces only the compile/link half, which ch. 25 already proved trustworthy (fixed-point). Whole-function decompile→recompile stays unsafe; `jl_rt_asm.py` remains the faithful-edit route.
+- **Hand-authored C → cave splice: YES, newly strong (this is the R8 shape of §30.14.45).** We author the source, so nothing is lost at decompile time. Enablers: open `clang -target pi32v2 -mcpu=r3` + `ld.lld` releases `pi32v2-23.1.5-5` (`-Oz` code −4.64 % vs JieLi; `-pi32v2-large-program` 6-byte `call.xl` for far caves), fully documented ABI (upstream COMPILER.md + ch. 34), and the ch. 35 sim/oracle pre-flash gates. A C blob can call app functions by absolute address (function-pointer casts to `0x01E1792E` etc.). The Phase-A bind-flow decode (§30.14.41) becomes a re-implementable SPECIFICATION: a task-level routine walking the app's own state expectations — precisely where R3–R7's byte/command levers died (the bind needs app-originated flow state BEFORE connect-complete). The wall (bind logic in TID's closed app) is unchanged; the authoring weapon is upgraded from hand-asm caves to real C.
+- **SDK rebuild as full-app replacement: still not the H3 app.** The `0x102F0` bind logic exists as C source only in the SDK's generic single-device analogue (`user_info_t`, ch. 22 §9B.11), never TID's app (no fork contains it, §28.7). An SDK build boots + pairs (ch. 32 P0/P1) but ships a reference app — all H3 radio UI/BK4819 work would need re-implementation; and the fork's JieLi-LLVM-4 bitcode reading (4898/4900) is proven on the AC79 SDK only, AC63/br23 unmeasured (upstream GAPS). For the two-device goal the ESP32 combo device remains the cheaper sidestep (§9B.6.1).
+
 ## 35.8 Artifacts
 
 - `tools/jl_sim.py` — simulator wrapper (§35.2); tests §35.4 all as recorded.

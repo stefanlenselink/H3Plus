@@ -197,6 +197,15 @@ CASES = [
     ("r6a",             ["--incoming-redial", "--redial-bind"], 0),
     ("r6a_alias",       ["--REDIAL-BIND", "--incoming-redial"], 0),
     ("r6a_alone",       ["--redial-bind"], 1),
+    # ch.30 R8 redial-appswap (app-slot swap before bind) (2026-11-10)
+    ("r8",              ["--incoming-redial", "--redial-appswap"], 0),
+    ("r8_alone",        ["--redial-appswap"], 1),
+    ("r8_conf_bind2",   ["--incoming-redial", "--redial-appswap",
+                         "--redial-bind2"], 1),
+    ("r8_conf_cur",     ["--incoming-redial", "--redial-appswap",
+                         "--redial-current"], 1),
+    ("r8_conf_bind",    ["--incoming-redial", "--redial-appswap",
+                         "--redial-bind"], 1),
 ]
 
 RE_BYTES = re.compile(r"plaintext bytes changed: (\d+)")
