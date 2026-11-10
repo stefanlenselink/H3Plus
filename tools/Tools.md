@@ -55,7 +55,7 @@ All paths below are relative to the repo root.
    - [`jl_sfcenc.py`](#31-jl_sfcencpy-) ⭐
    - [UBOOT-era LFSR solvers: `jl_map.py`, `jl_phasemap.py`, `jl_decrypt.py`, `jl_solve.py`, `jl_recover_key.py`, `jl_bruteforce.py`, `jl_other_ciphers.py`](#32-uboot-era-lfsr-solvers)
 4. [Disassembly & static analysis](#4-disassembly--static-analysis)
-   - [`pi32dis.py`](#41-pi32dispy-) · [`xref.py`](#42-xrefpy) · [`tools/isa/pi32v2.md`](#43-toolsisapi32v2md) · [`pf78tbl.py`](#44-pf78tblpy) · [`findva.py`](#45-findvapy) · [`freespace.py`](#46-freespacepy) · [`isa_xcheck.py`](#47-isa_xcheckpy)
+   - [`pi32dis.py`](#41-pi32dispy-) · [`xref.py`](#42-xrefpy) · [`tools/isa/pi32v2.md`](#43-toolsisapi32v2md) · [`pf78tbl.py`](#44-pf78tblpy) · [`findva.py`](#45-findvapy) · [`freespace.py`](#46-freespacepy) · [`isa_xcheck.py`](#47-isa_xcheckpy) · [`jl_sim.py`](#48-jl_simpy) · [`jl_oracle.py`](#49-jl_oraclepy)
 5. [General binary inspection](#5-general-binary-inspection)
    - [`analyze.py`](#51-analyzepy) · [`strings.py`](#52-stringspy) · [`region.py`](#53-regionpy) · [`hexdump.py`](#54-hexdumppy) · [`headers.py`](#55-headerspy) · [`pedump.py`](#56-pedumppy)
 6. [Bluetooth test rig (Linux)](#6-bluetooth-test-rig-linux)
@@ -706,6 +706,76 @@ and Python ≥ 3.11 (upstream uses `tomllib`).
 ```bash
 python3 tools/isa_xcheck.py work/app_dec.bin --sample 1
 python3 tools/isa_xcheck.py work/app_dec.bin --upstream ../pi32v2-isa --mcpu r3 --show 12
+```
+
+### 4.8 `jl_sim.py`
+
+**What:** pre-flash **simulator** for cave logic and patch behaviour. Wraps the
+hardware-fitted pi32v2 CPU model of
+[`jvitkauskas/pi32v2-isa`](https://github.com/jvitkauskas/pi32v2-isa) `tools/llvm/sim.py`
+(models fitted instruction-by-instruction to a real AC791N, ch. 34 §34.8) and runs it
+over our decrypted app flat-loaded at `0x01E00000`. `--patch VA:HEX` overlays patch/cave
+bytes before the run (= simulate the patched image), `--seed VA:HEX` primes RAM (conn
+records `0x1A5B8`, routing byte `0xB464`, dispatcher base `0x1A520`, ...), `--start`/
+`--call` + `--arg` enter stock or patched code, `--trace` prints every executed
+instruction, and `--expect rN=VAL` / `--expect-mem VA:HEX` turn a run into a CI-able
+assertion (exit 0/1). Reports stop reason, all 16 registers, flags/sp/rets and a
+byte-run diff of every memory write.
+
+**Why:** catches wrong cave logic, wrong branch conditions and mis-stamped bytes
+**before** a flash round-trip. Coverage on our app: only 0.31 % of decoded words
+(147 forms, all DSP/exception/debug) have no model - every ALU/memory/branch/call form
+our caves use is modelled; hitting an unmodelled form stops the run with a clear
+`unsupported form: <id> at <pc>` coverage message.
+
+**Caveats:** models are fitted to the **AC791N**, not our BR23/AC635N die; SFR reads
+return 0 and `mov.sr_r`-style SFR writes stop the run (our cave code does not use them);
+no interrupts. A sim PASS is **logic evidence, not a hardware verdict** - flashing
+remains the final authority (ch. 35).
+
+```bash
+# the --no-kick patch: r0 = 3; rts  ->  r0 == 3 and clean return
+python3 tools/jl_sim.py --start=0x01E5B22A --patch=0x01E5B22A:40238000 --expect=r0=3 --trace
+# walk the connect-complete tbh guard with routing byte 3
+python3 tools/jl_sim.py --start=0x01E61270 --flags=2 --stop-va=0x01E612CA
+# run a whole patched image instead of the stock one
+python3 tools/jl_sim.py --image=work/ch30_r7.bin --start=0x01EA7722 --max-steps=500
+```
+
+**Requires:** a clone of `pi32v2-isa` (default `../pi32v2-isa`, override `--upstream`)
+and Python ≥ 3.11. Works around an upstream artifact (uncommitted `/root/...`
+ids-file in `semantics/m2.py`) by re-constructing the model list from the table.
+
+---
+
+### 4.9 `jl_oracle.py`
+
+**What:** thin wrapper over the upstream **SHA-pinned JieLi toolchain oracle**
+(`pi32v2isa.oracle`, ch. 34 §34.8): the vendor `clang` + `objdump` as a strict black box,
+releases pinned by SHA-256 (`20250324.1` `f686586b...`, `20260730.1` `a1545cdd...`).
+Sub-commands: `status` (which releases are pinned / present), `fetch [--release]`
+(download + SHA-256 verify + unpack under the upstream `oracle/` dir - never committed),
+`decode HEX...` (JieLi objdump's reading of raw bytes, two-nop padded so a probe cannot
+swallow its neighbour), `encode "asm line"...` (JieLi assembler's bytes for a line) and
+`site VA:HEX` - the **mandatory second opinion**: splices the patch into the image
+context, shows JieLi's objdump reading of it and asserts the instruction at the site is
+exactly the patch length and that re-entry at `VA+len` is instruction-aligned.
+
+**Why:** the `.github/copilot-instructions.md` MANDATORY SECOND OPINION rule - every new
+cave body / trampoline / patch encoding gets the vendor toolchain's verdict (length,
+alignment, decode) before flashing; catches the class of bugs where our hand spec
+decodes a form differently from the chip's own tools (ch. 34 §34.12).
+
+**Requires:** a clone of `pi32v2-isa` (default `../pi32v2-isa`), Python ≥ 3.11, and -
+for `decode`/`encode`/`site` - a fetched toolchain (`python3 tools/jl_oracle.py fetch`,
+user's call; or set `PI32V2_TOOLCHAIN`). Degrades with a clean message when absent.
+
+```bash
+python3 tools/jl_oracle.py status
+python3 tools/jl_oracle.py fetch
+python3 tools/jl_oracle.py site 0x01E5B22A:40238000 --image=work/app_dec.bin
+python3 tools/jl_oracle.py decode 40238000 40208000
+python3 tools/jl_oracle.py encode "r0 = 3" "pc = [sp++]"
 ```
 
 ---

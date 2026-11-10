@@ -1,7 +1,7 @@
 # copilot-instructions.md — TIDRADIO H3 Plus Firmware RE
 
 Instructions for AI coding agents working in this repository. Read this before making
-changes. It is distilled from `README.md`, `ARTIFACTS.md`, `findings/` (35 files),
+changes. It is distilled from `README.md`, `ARTIFACTS.md`, `findings/` (36 files),
 `tools/Tools.md`, and the verified working practices of this project.
 
 ## What this repository is
@@ -32,7 +32,7 @@ patch makes any BT headset's mic the PTT transmit source, hardware-confirmed.
 
 | Path | Contents |
 |---|---|
-| `findings/Findings.md` | **Index** of 34 numbered chapters; old §9A.x/§12A.x section numbers preserved inside chapters |
+| `findings/Findings.md` | **Index** of 35 numbered chapters; old §9A.x/§12A.x section numbers preserved inside chapters |
 | `findings/08–13-*.md` | The Bluetooth effort (§9A.1–9A.50) |
 | `findings/22-bluetooth-7-multipoint-architecture.md` | §9B: dual-device/multipoint analysis |
 | `findings/23-bluetooth-8-bt-ptt2.md` | §9C: BT-PTT2 (BT mic on VFO B) — trampoline + code cave design, **hardware-confirmed 2026-09-30** |
@@ -164,7 +164,7 @@ python tools/patch_h3plus_firmware_bluetooth.py <src> [<dst>] [--show]
   `FF00-FFEF` forms that desynced old listings and silently corrupted xref
   conclusions ([findings/34 SS34.2, SS34.12](../findings/34-pi32v2-isa-open-reference.md));
   a cave that lands on a form our table misses decodes as garbage in `work/full.lst`
-  yet runs fine - only the upstream table shows the truth.
+   yet runs fine - only the upstream table shows the truth. Additionally run `tools/jl_sim.py` pre-flash on every cave - `--patch VA:HEX` overlay + `--expect rN=VAL` assertions execute the patched code on the AC791N hardware-fitted CPU model (ch. 35; sim PASS = logic evidence, flashing stays the final authority) - and, once the pinned toolchain is fetched (`tools/jl_oracle.py fetch`), `tools/jl_oracle.py site VA:HEX` for the JieLi-authority decode/length/re-entry verdict ([findings/35](../findings/35-pre-flash-simulation-and-pinned-oracle.md)).
 
 - `work/full.lst` (user-generated, 19.5 MB) is the v1.0.50 disassembly; format:
   `01E00000  3e 58  [005000]  mnemonic`. Regenerate with `tools/pi32dis.py`.
