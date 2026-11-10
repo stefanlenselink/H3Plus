@@ -66,6 +66,7 @@ All paths below are relative to the repo root.
 9. [Ghidra pi32v2 decompile ⇒ compile route](#9-ghidra-pi32v2-decompile--compile-route)
    - [`ghidra/MoveBlock.java`](#91-ghidramoveblockjava) · [`ghidra/SeedFunctions.java`](#92-ghidraseedfunctionsjava) · [`ghidra/DumpDecompiled.java`](#93-ghidradumpdecompiledjava) · [`ghidra/rt_is1t2.c` + `ghidra/splice_rt.py`](#94-round-trip-example) · [`disassemble_app.py` + `ghidra/DumpAll.java`](#95-full-app-disassembly--decompilation-tree)
 10. [USB bootloader client — `jl_hidboot.py`](#10-usb-bootloader-client--jl_hidbootpy-) ⭐ (Linux, root)
+11. [`jl_rt_asm.py`](#11-jl_rt_asmpy--provable-asm-round-trip-image--asm-text) — provable asm round-trip pipeline
 
 ---
 
@@ -1212,3 +1213,32 @@ sudo python3 tools/jl_hidboot.py reboot
 * 2026-11-07 — handshake + CRC mapping verified vs `work/ch32_p1.bin` (4/4 blocks
   byte-exact); `restore work/ch30_e7ref.bin` **PASSED**: 196/196 sector CRCs
   verified, radio rebooted to the E7 daily driver from the P1 SDK image.
+
+## 11. `jl_rt_asm.py` — provable asm round-trip (image ⇄ asm text)
+
+Pipeline for the asm-level edit route (findings/32 §32.11): wraps a raw app
+plaintext into a minimal ELF32 (machine 0xF1) so the official JieLi objdump
+decodes it, disassembles, then iterates assemble→re-decode until the output is
+**BYTE-EXACT**: identical sizes, identical instruction text, and identical
+bytes. Items whose re-encoding differs from stock (same text, different legal
+encoding — hardware-visible bits objdump text does not show; 14,430 such items
+on this image, which is why a mere text fixed point flashed DEAD) are pinned
+as raw `.short` stock words. Data/garbage regions emit raw `.short` words;
+>4-instruction displayed it-blocks and `} else {` blocks get their header
+pinned raw (hardware it-blocks predicate ≤4 instructions). State persists in
+`<tag>.pinned` / `<tag>.dropc` and seeds across images.
+
+```bash
+python tools/jl_rt_asm.py wrap work/app_dec.bin app.elf      # raw -> ELF32 0xF1
+python tools/jl_rt_asm.py dis app.elf app_dis.txt            # objdump -D -j .text
+python tools/jl_rt_asm.py round app_dis.txt 0x1e00100 0x1e0C4000 full   # self-heal loop
+python tools/jl_rt_asm.py bin full.elf full_text.bin         # objcopy -j .text
+```
+
+Toolchain dir via env `JIELI_TC` (default the 20250324.1 Linux toolchain).
+Verified 2026-11-08: BYTE-EXACT OK on the E7-ref daily driver app body —
+`e7rt2_text.bin` 0 byte diffs vs stock; packaged image == `work/ch30_e7ref.bin`
+across the whole strict flash region (VM pairing bytes aside). Editable source
+lives at `work/rt/e7rt2.s`.
+Editing workflow: modify instruction text lines in `<tag>.s` (keep sizes or use
+labels), re-run `round`, then `bin` + `work/ch32_p2_pack.py` to package.
