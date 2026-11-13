@@ -357,6 +357,30 @@ as brick-insurance.
 
 ---
 
+### `--led-probe` (ch. 36 LED debug probe)
+
+v3: paints the LED state bytes RAM `0xB301..0xB307` all-ON (`0xFF`) and calls the
+vendor renderer `0x01EB70CE` itself at EVERY key-0x2A TX start (PTT / PTT2 / BT-PTT),
+then resumes the stock TX start at `0x01E794E8` unchanged. Root cause of v1/v2
+invisibility (§36.8): the LED bit-bang library is a **RAM-relocated blob** (app entry
+copies `0xCAF8` B from flash `0x01EB6140` to RAM `0x0`; live primitives CS `0x180`,
+lock `0xDAA`, shift `0xDCC`, init `0xE6C`, runner `0xF8E`) and the renderer recomposes
+the whole panel from the state bytes (payload + SFR `0x1E0000 |= 0x10` latch), so raw
+frames sent outside the renderer lose the render race. Implementation: 44 B fire
+routine @`0x01EA7722` (ends `0x01EA774E`) + 4 B redirect of the BT-PTT2 cave handler
+tail @`0x01EA76FE`; task context (key-scan standby handler, HW-confirmed safe per
+ch. 23). Requires a BT-PTT2 action (`--PTT2=BT-PTT2` or `--OD-PTT=BT-PTT2`); mutually
+exclusive with `--incoming-redial/--incoming-mode3/--incoming-hfp/--cmd5-target/
+--gate-close/--r1-kill/--r1-walker-kill/--d1-target-wait` (cave-window overlap). Use
+as an on-hardware marker for statically-predicted paths.
+Full LED hardware model + evidence: [findings/36](../findings/36-led-debug-probe.md).
+Status: v1 (`00a36286…`) and v2 (`efa32090…`) both field-ran 2026-11-12 — **no visible
+effect, stock behavior** (§36.6/§36.7); v3 image `work/ch36c_ledprobe.bin` sha
+`387a4cf3…` (44 B, sector `0xAC000`, uboot equal) oracle-verified, both suites green,
+jl_sim PASS (state bytes FF + runner call + GPIO writes). **v3 field-ran 2026-11-13
+— STILL stock (3rd identical result, no crash) ⇒ verdict IMPRACTICAL, probe
+DROPPED (§36.10); the option stays in the tool marked dropped — no v4.**
+
 ## 2. Firmware patching
 
 ### 2.1 `patch_btname.py`

@@ -206,6 +206,17 @@ CASES = [
                          "--redial-current"], 1),
     ("r8_conf_bind",    ["--incoming-redial", "--redial-appswap",
                          "--redial-bind"], 1),
+    # ch.36 LED debug probe (both-LEDs frame at every TX start) (2026-11-11)
+    ("lp",              ["--PTT2=BT-PTT2", "--led-probe"], 0),
+    ("lp_e7",           ["--PTT=BT-PTT", "--PTT2=BT-PTT2", "--OD-PTT=PTT",
+                         "--no-kick", "--conn-num=2", "--force-page-scan",
+                         "--force-role-keep", "--no-disconnect-13",
+                         "--no-pairing-kick", "--led-probe"], 0),
+    ("lp_alias",        ["--PTT2=BT-PTT2", "--LED-PROBE"], 0),
+    ("lp_alone",        ["--led-probe"], 1),
+    ("lp_conf_redial",  ["--incoming-redial", "--led-probe"], 1),
+    ("lp_conf_gate",    ["--gate-close", "--led-probe"], 1),
+    ("lp_conf_mode3",   ["--incoming-mode3", "--led-probe"], 1),
 ]
 
 RE_BYTES = re.compile(r"plaintext bytes changed: (\d+)")

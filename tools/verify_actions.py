@@ -1189,6 +1189,30 @@ if cp.returncode == 0:
     ck(cp2.returncode == 0 and "Nothing to do" in cp2.stdout,
        "--redial-appswap idempotent")
 
+# --- ch.36 LED debug probe: both-LEDs frame at every TX start (2026-11-11) -
+lpi = os.path.join(OUTDIR, "ledprobe.bin")
+cp = run(SRC, lpi, "--only", "pfhandler", "--only", "pfcave",
+         "--only", "ledprobefire", "--PTT2=BT-PTT2", "--led-probe")
+ck(cp.returncode == 0, "--led-probe build")
+if cp.returncode == 0:
+    a = dec(lpi)
+    ck(g(a, P.LEDPROBE_CAVE_VA, len(P.LEDPROBE_FIRE_BYTES))
+       == P.LEDPROBE_FIRE_BYTES,
+       "LED fire routine written at 0x01EA7722")
+    ck(g(a, P.CAVE_VA + 32, 4)
+       == P.encode_goto32(P.CAVE_VA + 32, P.LEDPROBE_CAVE_VA),
+       "BT-PTT2 handler tail redirected to the fire routine")
+    ck(P.LEDPROBE_CAVE_VA + len(P.LEDPROBE_FIRE_BYTES) <= 0x01EA7849,
+       "LED fire window fits the verified ALLZERO cave run")
+    cp = run(lpi, "--show", "--PTT2=BT-PTT2", "--led-probe")
+    ck(cp.returncode == 0 and "UNKNOWN" not in cp.stdout
+       and "MIXED" not in cp.stdout, "--show on LED-probe image clean")
+    cp2 = run(lpi, lpi + ".2", "--only", "pfhandler", "--only",
+              "pfcave", "--only", "ledprobefire",
+              "--PTT2=BT-PTT2", "--led-probe")
+    ck(cp2.returncode == 0 and "Nothing to do" in cp2.stdout,
+       "--led-probe idempotent")
+
 # --- cleanup ----------------------------------------------------------------
 if not fail and not KEEP:
     shutil.rmtree(OUTDIR)

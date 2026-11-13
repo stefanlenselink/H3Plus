@@ -753,7 +753,7 @@ CAVE_REL_VA = CAVE_VA + 48
 H2A_TRAMP_NATIVE = bytes.fromhex("50ee7707 80a7 52ee7604 bfea2a02".replace(" ", ""))
 
 
-def _cave_images():
+def _cave_images(led_probe=False):
     """The cave contents: TX handler, press helper, release helper.
 
     The handler runs in the key-0x2A standby-handler context (r7 = gp)
@@ -776,7 +776,9 @@ def _cave_images():
     handler += bytes.fromhex("80a7")                   # r0 = r0 >> 7
     handler += bytes.fromhex("52ee7604")               # b[r7 + 0x46] = r0
     handler += encode_call(CAVE_VA + 28, TXSTART2_VA)  # call TX-start core
-    handler += encode_goto32(CAVE_VA + 32, H2A_RESUME_VA)
+    handler += encode_goto32(CAVE_VA + 32,
+                             LEDPROBE_CAVE_VA if led_probe
+                             else H2A_RESUME_VA)
     assert len(handler) == 36
 
     press = bytearray()
@@ -795,6 +797,41 @@ def _cave_images():
     rel += bytes.fromhex("0004")                       # pc = [sp++]
     assert len(rel) == 20
     return bytes(handler) + bytes(press) + bytes(rel)
+
+
+# --led-probe  (ch. 36 LED debug probe, v3 2026-11-12): the two top LEDs are
+# a SERIAL 4-wire LED-driver IC, bit-banged by an app library that is a
+# RAM-RELOCATED BLOB - the app entry copies 0xCAF8 bytes from flash
+# 0x01EB6140 to RAM 0x00000000, so the live primitives are RAM functions
+# (CS 0x180, lock 0xDAA, shift 0xDCC, init 0xE6C, runner 0xF8E; findings/36
+# SS36.8). v1/v2 bit-banged raw frames from the flash copy and LOST the
+# render race: the vendor renderer runs right after the TX start and
+# re-composes the panel from the RAM STATE BYTES 0xB301..0xB307 (the runner
+# loop sends b[0xB301+n], n=0..6, then latches SFR 0x1E0000 |= 0x10). v3
+# therefore paints those state bytes ALL-ON (0xFF) and calls the VENDOR
+# RENDERER 0x01EB70CE itself (prologue [--sp]={rets,r7-r4} preserves our
+# handler registers), then resumes at H2A_RESUME_VA so the stock TX start
+# proceeds. The handler tail (CAVE_VA+32) redirect is unchanged; the fire
+# routine is 44 B @0x01EA7722 (ends 0x01EA774E, clear of the R1/R1-b cave
+# at 0x01EA7758), task context (key-scan standby handler - HW-confirmed
+# safe per ch. 23). Every byte verified against the upstream oracle table
+# (ch. 34/35 MANDATORY SECOND OPINION).
+LEDPROBE_CAVE_VA = 0x01EA7722
+LEDPROBE_FIRE_BYTES = bytes.fromhex(
+    "c0ff01b30000793f52ee001052ee011052ee021052ee031052ee041052ee0510"
+    "52ee061080eac27cfeeacd8e")
+assert len(LEDPROBE_FIRE_BYTES) == 44
+assert LEDPROBE_CAVE_VA + 44 <= 0x01EA7849          # inside the cave run
+assert LEDPROBE_FIRE_BYTES[0:6] == bytes.fromhex("c0ff01b30000")  # r0=0xB301
+assert LEDPROBE_FIRE_BYTES[6:8] == bytes.fromhex("793f")          # r1=0xFF
+for _lp_n in range(7):                               # 7x b[0xB301+n]=0xFF
+    assert (LEDPROBE_FIRE_BYTES[8 + 4 * _lp_n:12 + 4 * _lp_n]
+            == bytes([0x52, 0xEE, _lp_n, 0x10]))
+assert decode_call(LEDPROBE_CAVE_VA + 36,
+                   LEDPROBE_FIRE_BYTES[36:40]) == 0x01EB70CE  # vendor runner
+assert decode_call(LEDPROBE_CAVE_VA + 40,
+                   bytes([LEDPROBE_FIRE_BYTES[40] & ~0x40])
+                   + LEDPROBE_FIRE_BYTES[41:44]) == H2A_RESUME_VA
 
 
 def _pf_body7_h2():
@@ -2192,7 +2229,7 @@ def build_patches(duplex_mode=4, ptt2_action="PTT2", odptt_action="OD-PTT",
                   incoming_mode3=False, incoming_hfp=False,
                   incoming_redial=False, redial_bind=False,
                   redial_current=False, redial_bind2=False,
-                  redial_appswap=False):
+                  redial_appswap=False, led_probe=False):
     """Return the patch table, with the `duplex` patch's target selected by
     `duplex_mode` (see DUPLEX_LABELS) and the `pflabels` multi-patch built
     for the (--PTT2, --OD-PTT) action pair (see PF_COMBO_PATCHES). The
@@ -2396,8 +2433,8 @@ def build_patches(duplex_mode=4, ptt2_action="PTT2", odptt_action="OD-PTT",
     patches["r1cave"] = {
         "desc": "code cave @0x%08X: R1 conditional-kill predicate" % R1_CAVE_VA,
         "va": R1_CAVE_VA,
-        "new": R1_CAVE_BYTES if r1_conditional_kill
-               else b"\x00" * len(R1_CAVE_BYTES),
+        "new": (R1_CAVE_BYTES if r1_conditional_kill
+                else b"\x00" * len(R1_CAVE_BYTES)),
         "states": {"native": b"\x00" * len(R1_CAVE_BYTES),
                    "r1cave": R1_CAVE_BYTES},
         "labels": {"native": "erased (all zero)",
@@ -2687,7 +2724,9 @@ def build_patches(duplex_mode=4, ptt2_action="PTT2", odptt_action="OD-PTT",
         _ird_cur = False
     _ird_bind = bool(incoming_redial and redial_bind and not _ird_cur
                      and not _ird_bind2 and not _ird_appswap)
-    _ird_new = (INCHRDL_CAVE_BYTES_CUR if (_ird_cur or _ird_bind2 or
+    _ird_new = (LEDPROBE_FIRE_BYTES + b"\x00" * (_ird_w - 44)
+                if (led_probe and not incoming_redial) else
+                INCHRDL_CAVE_BYTES_CUR if (_ird_cur or _ird_bind2 or
                                         _ird_appswap)
                 else INCHRDL_CAVE_BYTES_BIND if _ird_bind
                 else INCHRDL_CAVE_BYTES if incoming_redial
@@ -2712,8 +2751,12 @@ def build_patches(duplex_mode=4, ptt2_action="PTT2", odptt_action="OD-PTT",
                    "inchrdlbind": INCHRDL_CAVE_BYTES_BIND,
                    # recognition only (static): R6b --redial-current
                    # retargets the guard branch to the CUR window.
-                   "inchrdlcur": INCHRDL_CAVE_BYTES_CUR},
+                   "inchrdlcur": INCHRDL_CAVE_BYTES_CUR,
+                   "ledprobe": LEDPROBE_FIRE_BYTES
+                               + b"\x00" * (_ird_w - 44)},
         "labels": {"native": "erased (all zero)",
+                   "ledprobe": "LED-probe fire routine occupies this window "
+                               "(mutually exclusive)",
                    "inchrdlcave": "rout==1 && 2 recs inused -> arm 0x1A5F1="
                                   "joiner, kick its ACL; 0xF0 && match -> 3",
                    "inchrdlbind": "R5 cave + R6a: loop-guard (mailbox=="
@@ -2984,10 +3027,17 @@ def build_patches(duplex_mode=4, ptt2_action="PTT2", odptt_action="OD-PTT",
     patches["gatecave"] = {
         "desc": "code cave @0x%08X: close-gate stubs (spp + l2cap)" % GATE_CAVE2_VA,
         "va": GATE_CAVE2_VA,
-        "new": GATE_CAVE2_IMG if gate_close else b"\x00" * GATE_CAVE2_LEN,
-        "states": {"native": b"\x00" * GATE_CAVE2_LEN, "gated": GATE_CAVE2_IMG},
+        "new": (GATE_CAVE2_IMG if gate_close
+                else LEDPROBE_FIRE_BYTES
+                     + b"\x00" * (GATE_CAVE2_LEN - 44) if led_probe
+                else b"\x00" * GATE_CAVE2_LEN),
+        "states": {"native": b"\x00" * GATE_CAVE2_LEN, "gated": GATE_CAVE2_IMG,
+                   "ledprobe": LEDPROBE_FIRE_BYTES
+                               + b"\x00" * (GATE_CAVE2_LEN - 44)},
         "labels": {"native": "erased (all zero)",
-                   "gated": "gate stubs (flag test + replay + resume)"},
+                   "gated": "gate stubs (flag test + replay + resume)",
+                   "ledprobe": "LED-probe fire routine occupies this window "
+                               "(mutually exclusive)"},
         "target": "gated" if gate_close else "native",
         "ctx_va": GATE_CAVE2_VA,
         "ctx_base": b"\x00" * GATE_CAVE2_LEN,
@@ -3158,20 +3208,54 @@ def build_patches(duplex_mode=4, ptt2_action="PTT2", odptt_action="OD-PTT",
         "ctx_variant": _ctx_variant_fn(H2A_TRAMP_VA, H2A_TRAMP_VA, H2A_TRAMP_NATIVE),
     }
     cave_new = _cave_images()
+    cave_new_lp = _cave_images(led_probe=True)
     patches["pfcave"] = {
         "desc": "code cave @0x%08X: BT-PTT2 TX handler + press/release helpers"
                 % CAVE_VA,
         "va": CAVE_VA,
-        "new": cave_new,
-        "states": {"native": b"\x00" * CAVE_LEN, "bt2": cave_new},
+        "new": cave_new_lp if led_probe else cave_new,
+        "states": {"native": b"\x00" * CAVE_LEN, "bt2": cave_new,
+                   "bt2lp": cave_new_lp},
         "labels": {
             "native": "erased (all zero)",
             "bt2": "BT-PTT2 helper code",
+            "bt2lp": "BT-PTT2 helper code + LED-probe tail redirect",
         },
-        "target": "bt2",
+        "target": "bt2lp" if led_probe else "bt2",
         "ctx_va": CAVE_VA,
         "ctx_base": b"\x00" * CAVE_LEN,
         "ctx_variant": _ctx_variant_fn(CAVE_VA, CAVE_VA, b"\x00" * CAVE_LEN),
+    }
+    patches["ledprobefire"] = {
+        "desc": "code cave @0x%08X: LED-probe both-LEDs frame fire (ch. 36)"
+                % LEDPROBE_CAVE_VA,
+        "va": LEDPROBE_CAVE_VA,
+        "new": LEDPROBE_FIRE_BYTES if led_probe else b"\x00" * 44,
+        "states": {"native": b"\x00" * 44, "ledprobe": LEDPROBE_FIRE_BYTES,
+                   # recognition only: other cave options occupy this base
+                   "gated": GATE_CAVE2_IMG[:44],
+                   "inchrdl": INCHRDL_CAVE_BYTES[:44],
+                   "inchrdlbind": INCHRDL_CAVE_BYTES_BIND[:44],
+                   "inchrdlcur": INCHRDL_CAVE_BYTES_CUR[:44],
+                   "inchrdlappswap": INCHRDL_APPSWAP_BYTES[:44]},
+        "labels": {"native": "erased (all zero)",
+                   "ledprobe": "LED fire: paint b[0xB301..0xB307]=0xFF, call "
+                               "vendor renderer 0x01EB70CE -> resume 0x01E794E8",
+                   "gated": "close-gate stubs occupy this window "
+                            "(mutually exclusive)",
+                   "inchrdl": "R5 redial cave head occupies this window "
+                              "(mutually exclusive)",
+                   "inchrdlbind": "R6a redial-bind cave head occupies this "
+                                  "window (mutually exclusive)",
+                   "inchrdlcur": "R6b redial-current cave head occupies "
+                                 "this window (mutually exclusive)",
+                   "inchrdlappswap": "R8 appswap cave head occupies this "
+                                     "window (mutually exclusive)"},
+        "target": "ledprobe" if led_probe else "native",
+        "ctx_va": LEDPROBE_CAVE_VA,
+        "ctx_base": b"\x00" * 44,
+        "ctx_variant": _ctx_variant_fn(LEDPROBE_CAVE_VA, LEDPROBE_CAVE_VA,
+                                       b"\x00" * 44),
     }
     sites, guards = (PF_LABEL_VARIANTS[(ptt2_action, odptt_action)]
                      if (ptt2_action, odptt_action) != ("PTT2", "OD-PTT")
@@ -3986,6 +4070,20 @@ def main():
         "106 B window 0x01EA77D0..0x01EA783A, every byte verified against "
         "the upstream oracle table.",
     )
+
+    ap.add_argument(
+        "--led-probe",
+        dest="led_probe",
+        action="store_true",
+        help="LED DEBUG PROBE (ch. 36 v3): paints the LED state bytes "
+        "RAM 0xB301..0xB307 all-ON and calls the vendor renderer "
+        "0x01EB70CE (bit-bang lib relocated to RAM 0x0 at boot) at EVERY "
+        "key-0x2A TX start (PTT / PTT2 / BT-PTT), then resumes the stock "
+        "TX-start path unchanged. Requires a "
+        "BT-PTT2 action (reuses its cave: 4 B handler-tail redirect + 44 B "
+        "fire routine @0x01EA7722, task context). Use as an on-hardware "
+        "execution marker for statically-predicted code paths.",
+    )
     ap.add_argument(
         "--no-cleanup-kick",
         dest="no_cleanup_kick",
@@ -4204,6 +4302,19 @@ def main():
             "the D1 slot-check thunk cave (0x01EA77F0); they cannot be "
             "combined."
         )
+    if args.led_probe and args.PTT2 != "BT-PTT2" and args.OD_PTT != "BT-PTT2":
+        raise SystemExit(
+            "--led-probe rides on the BT-PTT2 cave (handler-tail redirect); "
+            "pass --PTT2=BT-PTT2 or --OD-PTT=BT-PTT2 too."
+        )
+    if args.led_probe and (args.incoming_redial or args.incoming_mode3
+                           or args.incoming_hfp or args.cmd5_target
+                           or args.gate_close or args.r1_conditional_kill
+                           or args.r1_walker_kill or args.d1_target_wait):
+        raise SystemExit(
+            "--led-probe's fire routine (0x01EA7722..0x01EA774E) overlaps "
+            "the gate/R1/redial cave windows; they cannot be combined."
+        )
 
     PATCHES = build_patches(args.bluetooth_mode, a7, a8, args.conn_num,
                             args.no_kick, args.force_page_scan,
@@ -4218,7 +4329,7 @@ def main():
                             args.incoming_hfp,
                             args.incoming_redial, args.redial_bind,
                             args.redial_current, args.redial_bind2,
-                            args.redial_appswap)
+                            args.redial_appswap, args.led_probe)
 
     raw, app, app_start = load_app(args.src)
     print("source: %s (%d bytes)" % (args.src, len(raw)))
@@ -4269,6 +4380,8 @@ def main():
         extra += " --redial-bind2 (multipoint R7)"
     if args.redial_appswap:
         extra += " --redial-appswap (multipoint R8)"
+    if args.led_probe:
+        extra += " --led-probe (LED debug probe, ch. 36)"
     print("configuration: --bluetooth-mode %d --PTT=%s --PTT2=%s --OD-PTT=%s%s\n"
           % (args.bluetooth_mode, ptt_action, a7, a8, extra))
 
@@ -4335,6 +4448,8 @@ def main():
         wanted += ["inchrdlcurcave"]
     if args.redial_appswap:
         wanted += ["inchrdlcurcave"]
+    if args.led_probe:
+        wanted += ["ledprobefire"]
     wanted = list(dict.fromkeys(wanted))
     if ({"pfbody7", "pfbody8", "pfrelease", "pflabels"} & set(wanted)
             and PF_LITERAL_PATCHES & set(wanted)):
