@@ -1213,6 +1213,49 @@ if cp.returncode == 0:
     ck(cp2.returncode == 0 and "Nothing to do" in cp2.stdout,
        "--led-probe idempotent")
 
+# --- ch.37 compiled-C bind routine v4 (DIAL stamp + kick + direct dial) -----
+bci = os.path.join(OUTDIR, "bindc.bin")
+cp = run(SRC, bci, "--only", "bindchook", "--only", "bindccave",
+         "--only", "bindcdial", "--only", "inchfpbail", "--bind-c")
+ck(cp.returncode == 0, "--bind-c build")
+if cp.returncode == 0:
+    a = dec(bci)
+    ck(g(a, P.BINDC_CAVE_VA, len(P.BINDC_CAVE_BYTES))
+       == P.BINDC_CAVE_BYTES,
+       "bindc compiled-C blob written at 0x01EA7722")
+    ck(g(a, P.BINDC_HOOK_VA, 4) == P.BINDC_HOOK,
+       "tbh hook 0x01E61270 redirected to the bindc cave")
+    ck(g(a, P.BINDC_DIAL_HOOK_VA, 4) == P.BINDC_DIAL_HOOK,
+       "dial wrapper 0x01E600B4 redirected to the DIAL stamp tramp")
+    ck(g(a, P.INCHFP_BAIL_VA, 4) == b"\x00" * 4,
+       "cmd-1 is_1t2 bail 0x01E17A2A NOP'd (v4 direct dial reaches queue)")
+    ck(P.BINDC_CAVE_VA + len(P.BINDC_CAVE_BYTES) <= 0x01EA7849,
+       "bindc cave window fits the verified ALLZERO cave run")
+    ck(len(P.BINDC_CAVE_BYTES) == 290
+       and P.BINDC_CAVE_BYTES[:8] == bytes.fromhex("002580ea01008000"),
+       "bindc blob = 290 B, thunk r0=[sp+20]/call/rts")
+    ck(P.BINDC_CAVE_BYTES[264:286] == bytes.fromhex(
+           "750460e0e03b0d60bd600d61bd610d62bd6241e0100b"),
+       "DIAL stamp: push + r3=0x1C000 + 3x halfword copy + r1=0xB10")
+    ck(P.BINDC_DIAL_RESUME_VA == 0x01E600BA
+       and P.decode_goto32(P.BINDC_STAMP_VA + 22,
+                           P.BINDC_CAVE_BYTES[286:290])
+       == P.BINDC_DIAL_RESUME_VA,
+       "DIAL stamp tail resumes the dial wrapper at 0x01E600BA "
+       "(instruction boundary after the 6 B stolen prologue)")
+    cp = run(bci, "--show", "--bind-c")
+    ck(cp.returncode == 0 and "UNKNOWN" not in cp.stdout
+       and "MIXED" not in cp.stdout, "--show on bindc image clean")
+    ck(bytes([0x01E1792E & 0xFF, (0x01E1792E >> 8) & 0xFF,
+              (0x01E1792E >> 16) & 0xFF,
+              (0x01E1792E >> 24) & 0xFF]) in P.BINDC_CAVE_BYTES,
+       "bindc body embeds USP dispatcher 0x01E1792E (direct cmd-1 post)")
+    cp2 = run(bci, bci + ".2", "--only", "bindchook", "--only",
+              "bindccave", "--only", "bindcdial", "--only", "inchfpbail",
+              "--bind-c")
+    ck(cp2.returncode == 0 and "Nothing to do" in cp2.stdout,
+       "--bind-c idempotent")
+
 # --- cleanup ----------------------------------------------------------------
 if not fail and not KEEP:
     shutil.rmtree(OUTDIR)

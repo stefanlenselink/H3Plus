@@ -381,6 +381,51 @@ jl_sim PASS (state bytes FF + runner call + GPIO writes). **v3 field-ran 2026-11
 — STILL stock (3rd identical result, no crash) ⇒ verdict IMPRACTICAL, probe
 DROPPED (§36.10); the option stays in the tool marked dropped — no v4.**
 
+### `--bind-c` (ch. 37 compiled-C bind routine, v4)
+
+The first deliverable of the compiled-C splice route: a **hand-authored C routine**
+(work/ch37/bind4_c.c) compiled with open clang
+(`-target pi32v2 -mcpu=r3 -Oz -mllvm -pi32v2-large-program -nostdlib`) and linked at
+a fixed cave VA with ld.lld (zero relocations), spliced in via this tool. v4 design
+(SS37.16, supersedes the v3 wrapper-dial that FIELD-FAILED SS37.14 and the v1
+press-replay that FIELD-FAILED SS37.7):
+- **DIAL stamp**: 4 B hook at the dial wrapper `0x01E600B4` entry (`750441e0`→
+  `c2eab93b`) → 26 B tramp in the cave copies every radio-dialed BD_ADDR to RAM
+  `0x1C000..05` and resumes at `0x01E600BA` — the instruction boundary after the 6 B prologue the stamp replays (v3 resumed at `0x01E600B8`, mid-instruction: field-FATAL, §37.12). All 3 dial callers are covered.
+- **Body** (252 B @`0x01EA772A` behind the 8 B thunk `r0=[sp+20]`, tbh hook
+  `0x01E61270: 50ee640d`→`82ea5732`): engages only when routing byte `b[0xB464]==1`
+  && idle && both conn records live (`0x1A5B8`/`0x1A5D4`: `b[+0x12]&0x20` +
+  `u16[+6]!=0`) && DIAL matches EXACTLY one record ⇒ target = the OTHER record (the
+  last-dialed device can NEVER be kicked — v1 self-kick fixed structurally). Saves
+  target to `PRIM 0x1C008`, STATE:=1, arms TMRADD `0x01E249CE(0, tick, 500 ms)` and
+  RETURNS (nothing blocking in connect-complete context).
+- **tick**: `FIND 0x01E17420(0, PRIM)`; handle live → `KDISC 0x01E07B08(h, 0x13)`,
+  TICKS++ (≥10 give up), re-arm; gone → `b[0x10E00] := (b&~0x3F)|0x40` DIRECT (no
+  setter(1)) + **v4: post `USP(1, 6, PRIM)` DIRECTLY @`0x01E1792E`** — the wrapper's
+  own inner dial post; the wrapper CALL was dropped because its preamble posts
+  `0x4A` `l2cap_disconnect_all_channel` whenever any handle is live = the incumbent-SPP
+  killer (SS37.16), and the cmd-1 dispatcher `is_1t2_connection` bail is NOP'd
+  @`0x01E17A2A` (site `inchfpbail`, else cmd 1 is silently dropped in our conn-num=2
+  build) = the press-proven app-originated dial (`0x3e` sink rewrites `_DAT_00010372`, classifier
+  stamps byte 3, HFP+SCO ride the dial); STATE:=3 sticky.
+- **Re-arm**: routing byte `0xF0` (teardown) → CTRL:=0 — every later join is fixed
+  again (self-heal; v1's one-shot-per-boot limitation gone).
+Statics RAM `0x1C000..0x1C013`. Cave 290 B @`0x01EA7722..0x01EA7844` (thunk 8 +
+body 256 + stamp 26 @`0x01EA782A`); mutually exclusive with `--incoming-*/--redial-*/
+--cmd5-target/--gate-close/--r1-kill/--r1-walker-kill/--d1-target-wait/--led-probe`
+(shared hook and/or cave run). Evidence: upstream-oracle byte-verified (stamp built
+with the real `pi32v2isa` assembler), jl_sim 12 scenarios PASS on the BUILT image (engage ×2 mirror/
+dormant variants/sticky/kick args/re-arm/give-up/gone-post/teardown/stamp end-to-end), both suites 0 failures.
+Full design + build pipeline: [findings/37](../findings/37-compiled-c-splice-route.md).
+Status: v1 image `work/ch37_bindc.bin` `3753c796…` FIELD-FAILED 2026-11-14 (§37.7,
+must not ship); v3 image `work/ch37c_bindc.bin` sha `2b488a23…` (E7 recipe +
+`--bind-c`, 266 B, sectors `0x065000`+`0x066000`+`0x0AC000` only, uboot equal);
+stage `work/ch37c_bindc.sh` + card `work/ch37c_bindcc.sh`; v3 FIELD-FAILED SS37.12
+(mid-instruction resume); **v3b** image `work/ch37d_bindc.bin` `73b6747b…` (1-byte fix,
+stage `work/ch37d_bindc.sh` + card `work/ch37d_bindcc.sh`) FIELD-RAN SS37.14: connectivity
+FIXED (all connect paths, zero freezes) but 9th goal-miss (no live SCO on the redial) +
+SPP dies post-engage; DECISION POINT SS37.15 (user chose v4). **v4 BUILT SS37.16** (root causes statically proven: wrapper `0x4A` preamble = SPP killer; `is_1t2` dispatcher bail dropped cmd 1 — v3b never re-dialed): image `work/ch37e_bindc.bin` sha `b91b3535…` (274 B, sectors `0x01C000`+`0x065000`+`0x066000`+`0x0AC000`, uboot equal), oracle 0 unknowns, jl_sim 12/12 PASS, suites green; stage `work/ch37e_bindc.sh` + card `work/ch37e_bindcc.sh` — **v4 FIELD-FAILED SS37.17: goal-miss #10 + first crash of the series + SPP keying dead all card => IN-IMAGE BIND ROUTE CLOSED (no v5); next = free reverse-order test on S1 SS37.18.**
+
 ## 2. Firmware patching
 
 ### 2.1 `patch_btname.py`

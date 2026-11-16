@@ -217,6 +217,17 @@ CASES = [
     ("lp_conf_redial",  ["--incoming-redial", "--led-probe"], 1),
     ("lp_conf_gate",    ["--gate-close", "--led-probe"], 1),
     ("lp_conf_mode3",   ["--incoming-mode3", "--led-probe"], 1),
+    # ch.37 compiled-C bind routine (kick joiner + replay stock press dial)
+    ("bindc",           ["--PTT2=BT-PTT2", "--bind-c"], 0),
+    ("bindc_e7",        ["--PTT=BT-PTT", "--PTT2=BT-PTT2", "--OD-PTT=PTT",
+                         "--no-kick", "--conn-num=2", "--force-page-scan",
+                         "--force-role-keep", "--no-disconnect-13",
+                         "--no-pairing-kick", "--bind-c"], 0),
+    ("bindc_alias",     ["--bind-c"], 0),
+    ("bindc_conf_redial", ["--incoming-redial", "--bind-c"], 1),
+    ("bindc_conf_mode3", ["--incoming-mode3", "--bind-c"], 1),
+    ("bindc_conf_gate",  ["--gate-close", "--bind-c"], 1),
+    ("bindc_conf_lp",    ["--led-probe", "--bind-c"], 1),
 ]
 
 RE_BYTES = re.compile(r"plaintext bytes changed: (\d+)")

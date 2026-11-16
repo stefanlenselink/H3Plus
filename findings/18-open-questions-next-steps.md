@@ -21,6 +21,7 @@ Configuration workarounds are **ruled out** — `BT Int Mic` has no effect on a 
 
 ### Priority 1b — The PTT-button + separate-headset stretch goal
 
+> **ROUTE 2026-11-15: the radio-side bind route is CLOSED (§37.17/§37.19, 12 levers). The live frontier moved to the accessory: [Ch. 38 — the TID-PTT accessory, make it PAGE](38-tid-ptt-accessory.md).**
 > **PLAN OF RECORD 2026-10-21: [Ch. 30 — the Two-Device Plan](30-two-device-plan.md).**
 > **Goal clarification (user, verbatim):** *"It's not rescoped — it was never intended in
 > the first place. It always was the idea to have multiple BT devices connected and use

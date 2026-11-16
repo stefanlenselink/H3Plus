@@ -426,6 +426,11 @@ def encode_goto32(site_va, target_va):
     return bytes(b)
 
 
+def decode_goto32(site_va, blob):
+    """Inverse of encode_goto32: decode `ff ea xx xx` -> target VA."""
+    return decode_call(site_va, bytes([blob[0] & ~0x40]) + blob[1:4])
+
+
 def encode_branch2(site_va, target_va, neq=True, reg=0):
     """Encode the 2-byte `if (r<reg> != 0) goto target` (or `== 0`).
 
@@ -832,6 +837,81 @@ assert decode_call(LEDPROBE_CAVE_VA + 36,
 assert decode_call(LEDPROBE_CAVE_VA + 40,
                    bytes([LEDPROBE_FIRE_BYTES[40] & ~0x40])
                    + LEDPROBE_FIRE_BYTES[41:44]) == H2A_RESUME_VA
+
+# ---- ch. 37 compiled-C bind route v3 (--bind-c, findings/37 SS37.10-37.11) --
+# v1 field-FAILED (SS37.7/37.8): the joiner-addr guard could not tell WHICH
+# connect-complete it was watching, so the TID-PTT's own dial-complete hit the
+# hook and the cave kicked + re-dialed the command device itself (SPP session
+# never re-binds after a forced kick = dead buttons). v3 fix = DIAL STAMP:
+# every app-originated dial funnels through the wrapper 0x01E600B4 (exactly 3
+# callers: setter-orchestrated 0x01E6022C, bare auto-reconnect FUN_01e66ef8
+# 0x01E670C6, settings press FUN_01e6ec9e 0x01E6ECEA; no pointer-table refs).
+# A 26 B stamp trampoline (at cave +262 = 0x01EA7828) replaces the wrapper's
+# first 4 bytes (goto32) and copies the dialed BD_ADDR (r0) into RAM 0x1C000..
+# before re-running the stolen push {rets,r5,r4} + r1=0xB10 and returning to
+# +B8. The tbh hook body (compiled C, work/ch37/bind3_c.c, clang -target
+# pi32v2 -mcpu=r3 -Oz -mllvm -pi32v2-large-program, link-at-VA, zero relocs)
+# engages only when routing byte==1 && idle && BOTH conn records live
+# (0x1A5B8/0x1A5D4: inuse byte+0x12 bit5, handle u16 @+6) && DIAL matches
+# exactly one => target = the OTHER record = by construction NEVER the device
+# the app just dialed (TID-PTT unkickable). tick (TMRADD 0x01E249CE, bt task,
+# 500 ms, <=10): FIND 0x01E17420(0,PRIM) -> KDISC 0x01E07B08(h,0x13); once
+# gone: mode byte b[0x10E00]:=1 direct + DIRECT inner dial post USP(1,6,PRIM)
+# via 0x01E1792E (v3b lesson SS37.14/SS37.16: the dial wrapper 0x01E600B4
+# preamble posts 0x4A l2cap_disconnect_all_channel whenever a handle is live
+# (@0x01E600EA/EC) = the TID-PTT SPP killer seen in the field, AND the cmd-1
+# dispatcher bails when is_1t2_connection() is true (@0x01E17A26/A2A, TRUE in
+# the conn-num=2 build with a link up -> v3b's wrapper dial was silently
+# dropped). USP(1,6,addr) is the wrapper's OWN inner post @0x01E60114: the 0x3e
+# sink rewrites _DAT_00010372, classifier stamps byte 3, HFP+SCO ride the
+# dial; the is_1t2 bail is NOP'd at site inchfpbail (R4-proven). STATE sticky 3 until a 0xF0 teardown re-arms
+# (self-heal). Statics base 0x1C000: DIAL+0..5 (stamp), PRIM+8..0xD, CTRL+0x10
+# (STATE byte0, TICKS byte1). Body always returns the routing byte in r0 (the
+# hook replaced the stock load 50ee640d; +4 consumes the byte). Every byte
+# upstream-oracle verified (SS37.11); jl_sim gates PASS.
+BINDC_HOOK_VA = 0x01E61270
+BINDC_CAVE_VA = 0x01EA7722
+BINDC_STAMP_OFF = 264                                # stamp inside cave blob
+BINDC_STAMP_VA = BINDC_CAVE_VA + BINDC_STAMP_OFF     # 0x01EA7828
+BINDC_DIAL_HOOK_VA = 0x01E600B4                      # dial wrapper entry
+# Entry prologue = 2 B push (B4) + 4 B `r1 = 2832` (B6..B9): the 4 B goto32
+# destroys both; the stamp reproduces BOTH and resumes at 0x01E600BA (the
+# first intact boundary — B8 would land mid-instruction, v3 field-FATAL).
+BINDC_DIAL_RESUME_VA = 0x01E600BA
+BINDC_CAVE_BYTES = bytes.fromhex(
+    "002580ea010080007604c0ff64b400000c4004f8080294f838e0c0ff10c00100"
+    "40ea00001492c0ff10c001000160914dc1ffb8a5010050ee122152e826281a63"
+    "124450ee1e2252e8202850ed1222025d037c0a7a156085e809301d62a61716e8"
+    "0045c1ffd4a50100c0ea0800156785e80c3050ed1032a21783e807201260827e"
+    "1962897e40ea01000182401656041004c1ffca77ea01c3ffce49e201402042e0"
+    "f401c30000047504c4ff10c001004560501780f81502c1ff08c00100c2ff2074"
+    "e1014020c200004dc2ff087be0014133c20000e10051c06002ff000a12006197"
+    "550460e0870b094061e13f1031268940c2ff08c00100c3ff2e79e10140214126"
+    "c30040ea03405504750460e0e03b0d60bd600d61bd610d62bd6241e0100bfdea"
+    "3bc4")
+assert len(BINDC_CAVE_BYTES) == 290
+assert BINDC_CAVE_VA + 288 <= 0x01EA7849             # inside the cave run
+assert BINDC_CAVE_BYTES[0:8] == bytes.fromhex("002580ea01008000")  # thunk
+assert decode_call(BINDC_CAVE_VA + 2,
+                   BINDC_CAVE_BYTES[2:6]) == 0x01EA772A   # thunk -> C body
+# stamp: push{rets,r5,r4} + r3=0x1C000 + 3x halfword copy r0->DIAL + r1=0xB10
+# + goto32 resume at 0x01E600BA; the 22 B replay the full 6 B stolen prologue
+# (`75 04` push + `41 e0 10 0b` r1=2832). Assembled by the upstream oracle
+# assembler (pi32v2-isa).
+assert BINDC_CAVE_BYTES[BINDC_STAMP_OFF:BINDC_STAMP_OFF + 22] == \
+    bytes.fromhex("750460e0e03b0d60bd600d61bd610d62bd6241e0100b")
+assert decode_goto32(BINDC_STAMP_VA + 22,
+                     BINDC_CAVE_BYTES[286:290]) == BINDC_DIAL_RESUME_VA
+BINDC_DIAL_STOCK = bytes.fromhex("750441e0")   # site width 4 B of 6 B window
+BINDC_DIAL_HOOK = encode_goto32(BINDC_DIAL_HOOK_VA, BINDC_STAMP_VA)
+assert decode_goto32(BINDC_DIAL_HOOK_VA, BINDC_DIAL_HOOK) == BINDC_STAMP_VA
+for _bc_v in (0x01E17420, 0x01E07B08, 0x01E1792E, 0x01E249CE,
+              0x1A5B8):                              # app targets embedded
+    assert bytes([_bc_v & 0xFF, (_bc_v >> 8) & 0xFF,
+                  (_bc_v >> 16) & 0xFF,
+                  (_bc_v >> 24) & 0xFF]) in BINDC_CAVE_BYTES
+BINDC_HOOK = encode_call(BINDC_HOOK_VA, BINDC_CAVE_VA)
+assert decode_call(BINDC_HOOK_VA, BINDC_HOOK) == BINDC_CAVE_VA
 
 
 def _pf_body7_h2():
@@ -2229,7 +2309,7 @@ def build_patches(duplex_mode=4, ptt2_action="PTT2", odptt_action="OD-PTT",
                   incoming_mode3=False, incoming_hfp=False,
                   incoming_redial=False, redial_bind=False,
                   redial_current=False, redial_bind2=False,
-                  redial_appswap=False, led_probe=False):
+                  redial_appswap=False, led_probe=False, bind_c=False):
     """Return the patch table, with the `duplex` patch's target selected by
     `duplex_mode` (see DUPLEX_LABELS) and the `pflabels` multi-patch built
     for the (--PTT2, --OD-PTT) action pair (see PF_COMBO_PATCHES). The
@@ -2587,9 +2667,16 @@ def build_patches(duplex_mode=4, ptt2_action="PTT2", odptt_action="OD-PTT",
         "new": D1_THUNK_CAVE_BYTES if d1_target_wait
                else b"\x00" * len(D1_THUNK_CAVE_BYTES),
         "states": {"native": b"\x00" * len(D1_THUNK_CAVE_BYTES),
-                   "d1thunk": D1_THUNK_CAVE_BYTES},
+                   "d1thunk": D1_THUNK_CAVE_BYTES,
+                   # recognition only: the ch.37 bindc blob covers this
+                   # window (CUR-window variants added by the teaching loop)
+                   "bindc": BINDC_CAVE_BYTES[D1_THUNK_CAVE_VA - BINDC_CAVE_VA
+                                             :D1_THUNK_CAVE_VA - BINDC_CAVE_VA
+                                             + len(D1_THUNK_CAVE_BYTES)]},
         "labels": {"native": "erased (all zero)",
-                   "d1thunk": "r0 = r4; goto 0x01E16824 (tail call)"},
+                   "d1thunk": "r0 = r4; goto 0x01E16824 (tail call)",
+                   "bindc": "ch. 37 --bind-c cave occupies this window "
+                            "(mutually exclusive)"},
         "target": "d1thunk" if d1_target_wait else "native",
         "ctx_va": D1_THUNK_CAVE_VA,
         "ctx_base": b"\x00" * len(D1_THUNK_CAVE_BYTES),
@@ -2624,19 +2711,26 @@ def build_patches(duplex_mode=4, ptt2_action="PTT2", odptt_action="OD-PTT",
                    # this window (same hook too) - never a target here.
                    # Truncated to this site's 54-byte width; the R4 cave's
                    # tail (55..58) lives in never-inspected zeros.
-                   "inchfpcave": INCHFP_CAVE_BYTES[:len(INCMODE3_CAVE_BYTES)]},
+                   "inchfpcave": INCHFP_CAVE_BYTES[:len(INCMODE3_CAVE_BYTES)],
+                   # recognition only: the ch.37 bindc blob (288 B from
+                   # 0x01EA7722) covers this window too.
+                   "bindc": BINDC_CAVE_BYTES[INCMODE3_CAVE_VA - BINDC_CAVE_VA
+                                             :INCMODE3_CAVE_VA - BINDC_CAVE_VA
+                                             + len(INCMODE3_CAVE_BYTES)]},
         "labels": {"native": "erased (all zero)",
                    "incmode3cave": "rout==1 && both conn records inused "
                                    "-> 0xB464 = 3",
                    "inchfpcave": "R4 --incoming-hfp cave occupies this "
-                                 "window (mutually exclusive)"},
+                                 "window (mutually exclusive)",
+                   "bindc": "ch. 37 --bind-c cave occupies this window "
+                            "(mutually exclusive)"},
         "target": "incmode3cave" if incoming_mode3 else "native",
         "ctx_va": INCMODE3_CAVE_VA,
         "ctx_base": b"\x00" * len(INCMODE3_CAVE_BYTES),
         "ctx_variant": _ctx_variant_fn(INCMODE3_CAVE_VA, INCMODE3_CAVE_VA,
                                        b"\x00" * len(INCMODE3_CAVE_BYTES)),
     }
-    ih = "enabled" if incoming_hfp else "stock"
+    ih = "enabled" if (incoming_hfp or bind_c) else "stock"
     patches["inchfp"] = {
         "desc": "connect-complete mode-switch tbh byte load (0x01E61270) "
                 "-> %s" % ih,
@@ -2666,12 +2760,18 @@ def build_patches(duplex_mode=4, ptt2_action="PTT2", odptt_action="OD-PTT",
                    # +54..+58 erased.
                    "incmode3cave": INCMODE3_CAVE_BYTES
                                    + b"\x00" * (len(INCHFP_CAVE_BYTES)
-                                                - len(INCMODE3_CAVE_BYTES))},
+                                                - len(INCMODE3_CAVE_BYTES)),
+                   # recognition only: the ch.37 bindc blob covers this too.
+                   "bindc": BINDC_CAVE_BYTES[INCHFP_CAVE_VA - BINDC_CAVE_VA
+                                             :INCHFP_CAVE_VA - BINDC_CAVE_VA
+                                             + len(INCHFP_CAVE_BYTES)]},
         "labels": {"native": "erased (all zero)",
                    "inchfpcave": "rout==1 && both conn records inused -> "
                                  "user_send_cmd_prepare(1, 6, [sp+20])",
                    "incmode3cave": "R3 --incoming-mode3 cave occupies this "
-                                   "window (mutually exclusive)"},
+                                   "window (mutually exclusive)",
+                   "bindc": "ch. 37 --bind-c cave occupies this window "
+                            "(mutually exclusive)"},
         "target": "inchfpcave" if incoming_hfp else "native",
         "ctx_va": INCHFP_CAVE_VA,
         "ctx_base": b"\x00" * len(INCHFP_CAVE_BYTES),
@@ -2681,11 +2781,11 @@ def build_patches(duplex_mode=4, ptt2_action="PTT2", odptt_action="OD-PTT",
     patches["inchfpbail"] = {
         "desc": "cmd-1 handler is_1t2_connection bail (0x01E17A2A) -> %s" % ih,
         "va": INCHFP_BAIL_VA,
-        "new": b"\x00" * 4 if incoming_hfp else INCHFP_BAIL_CTX,
+        "new": b"\x00" * 4 if (incoming_hfp or bind_c) else INCHFP_BAIL_CTX,
         "states": {"stock": INCHFP_BAIL_CTX, "inchfpbail": b"\x00" * 4},
         "labels": {"stock": "if (r0 != 0) goto exit (bail at 2 links)",
                    "inchfpbail": "nop x4 (cmd 1 works with 2 links up)"},
-        "target": "inchfpbail" if incoming_hfp else "stock",
+        "target": "inchfpbail" if (incoming_hfp or bind_c) else "stock",
         "ctx_va": INCHFP_BAIL_VA,
         "ctx_base": INCHFP_BAIL_CTX,
         "ctx_variant": _ctx_variant_fn(INCHFP_BAIL_VA, INCHFP_BAIL_VA,
@@ -2869,6 +2969,154 @@ def build_patches(duplex_mode=4, ptt2_action="PTT2", odptt_action="OD-PTT",
     patches["inchfp"]["states"]["inchrdl"] = INCHRDL_HOOK
     patches["inchfp"]["labels"]["inchrdl"] = (
         "R5 --incoming-redial hook at this site (mutually exclusive)")
+    # ---- ch. 37 compiled-C bind route (--bind-c, findings/37 SS37.4-37.6) ----
+    # Same tbh hook 0x01E61270 (BINDC_HOOK is byte-identical to INCHRDL_HOOK:
+    # both caves live at 0x01EA7722); the 288 B cave window disambiguates.
+    patches["bindchook"] = {
+        "desc": "connect-complete tbh hook 0x01E61270 -> compiled-C bind "
+                "cave (ch. 37)" if bind_c else
+                "connect-complete tbh hook 0x01E61270 (stock routing load)",
+        "va": BINDC_HOOK_VA,
+        "new": BINDC_HOOK if bind_c else INCHRDL_HOOK_CTX,
+        "states": {"stock": INCHRDL_HOOK_CTX,
+                   "bindc": BINDC_HOOK,
+                   "incmode3": INCHFP_HOOK},
+        "labels": {"stock": "stock: r0 = b[r6+212] (routing byte load)",
+                   "bindc": "compiled-C bind cave hook (bytes == R5 hook; "
+                            "the cave window disambiguates)",
+                   "incmode3": "R3/R4 hook at this site (mutually exclusive)"},
+        "target": "bindc" if bind_c else "stock",
+        "ctx_va": BINDC_HOOK_VA,
+        "ctx_base": INCHRDL_HOOK_CTX,
+        "ctx_variant": _ctx_variant_fn(BINDC_HOOK_VA, BINDC_HOOK_VA,
+                                       INCHRDL_HOOK_CTX),
+    }
+    _bc_w = len(BINDC_CAVE_BYTES)                    # 288
+    _bc_pad = _bc_w - _ird_w                         # 114
+
+    def _bcfit(_bs):
+        return _bs + b"\x00" * (_bc_w - len(_bs))
+    _bc_cur_win = _bcfit(INCHRDL_CAVE_BYTES_CUR[:_ird_w] + INCHRDL_CUR_BYTES)
+    _bc_b2_win = _bcfit(INCHRDL_CAVE_BYTES_CUR[:_ird_w] + INCHRDL_BIND2_BYTES)
+    _bc_sw_win = _bcfit(INCHRDL_CAVE_BYTES_CUR[:_ird_w]
+                       + INCHRDL_APPSWAP_BYTES)
+    patches["bindccave"] = {
+        "desc": "code cave @0x%08X: compiled-C bind state machine (ch. 37)"
+                % BINDC_CAVE_VA,
+        "va": BINDC_CAVE_VA,
+        "new": BINDC_CAVE_BYTES if bind_c else b"\x00" * _bc_w,
+        "states": {"native": b"\x00" * _bc_w,
+                   "bindc": BINDC_CAVE_BYTES,
+                   "ledprobe": LEDPROBE_FIRE_BYTES
+                               + b"\x00" * (_bc_w - 44),
+                   "inchrdlcave": INCHRDL_CAVE_BYTES + b"\x00" * _bc_pad,
+                   "inchrdlbind": INCHRDL_CAVE_BYTES_BIND + b"\x00" * _bc_pad,
+                   "inchrdlcur": _bc_cur_win,
+                   "inchrdlbind2": _bc_b2_win,
+                   "inchrdlappswap": _bc_sw_win,
+                    "legacy_presst": _bcfit(b"\x00" * _ird_w
+                                            + PRESST_CAVE_BYTES)},
+        "labels": {"native": "erased (all zero)",
+                   "bindc": "compiled-C bind v4: DIAL-stamp discriminator, "
+                             "kick the non-dialed live record + DIRECT "
+                             "cmd-1 dial USP(1,6,addr) (ch. 37 SS37.16)",
+                   "ledprobe": "LED-probe fire routine occupies this window "
+                               "(mutually exclusive)",
+                   "inchrdlcave": "R5 cave occupies this window (mutually "
+                                  "exclusive)",
+                   "inchrdlbind": "R6a cave occupies this window (mutually "
+                                  "exclusive)",
+                   "inchrdlcur": "R6b cave + CUR window head occupy this "
+                                 "window (mutually exclusive)",
+                   "inchrdlbind2": "R7 cave + CUR window head occupy this "
+                                   "window (mutually exclusive)",
+                   "inchrdlappswap": "R8 cave + CUR window head occupy this "
+                                     "window (mutually exclusive)",
+                   "legacy_presst": "R1-e presstcave occupies this window "
+                                    "(mutually exclusive)"},
+        "target": "bindc" if bind_c else "native",
+        "ctx_va": BINDC_CAVE_VA,
+        "ctx_base": b"\x00" * _bc_w,
+        "ctx_variant": _ctx_variant_fn(BINDC_CAVE_VA, BINDC_CAVE_VA,
+                                       b"\x00" * _bc_w),
+    }
+    for _bz_key, _bz_w in (
+            ("legacy_gate", _ird_legacy(gate=True) + b"\x00" * _bc_pad),
+            ("legacy_r1a", _ird_legacy(r1="a") + b"\x00" * _bc_pad),
+            ("legacy_r1b", _ird_legacy(r1="b") + b"\x00" * _bc_pad),
+            ("legacy_cmd5t", _ird_legacy(c5t=True) + b"\x00" * _bc_pad),
+            ("legacy_gate_cmd5t",
+             _ird_legacy(gate=True, c5t=True) + b"\x00" * _bc_pad),
+            ("legacy_cmd5t_presst",
+             _bcfit(_ird_legacy(c5t=True) + PRESST_CAVE_BYTES)),
+            ("legacy_gate_cmd5t_presst",
+             _bcfit(_ird_legacy(gate=True, c5t=True)
+                    + PRESST_CAVE_BYTES)),
+            ("legacy_cmd5t_presst_d1",
+             _bcfit(_ird_legacy(c5t=True) + PRESST_CAVE_BYTES
+                    + D1_THUNK_CAVE_BYTES)),
+            ("legacy_gate_cmd5t_presst_d1",
+             _bcfit(_ird_legacy(gate=True, c5t=True)
+                    + PRESST_CAVE_BYTES + D1_THUNK_CAVE_BYTES)),
+            ("d1thunk",
+             b"\x00" * (D1_THUNK_CAVE_VA - BINDC_CAVE_VA)
+             + D1_THUNK_CAVE_BYTES
+             + b"\x00" * (_bc_w - (D1_THUNK_CAVE_VA - BINDC_CAVE_VA
+                                   + len(D1_THUNK_CAVE_BYTES)))),
+            ("incmode3",
+             b"\x00" * (INCMODE3_CAVE_VA - BINDC_CAVE_VA)
+             + INCMODE3_CAVE_BYTES
+             + b"\x00" * (_bc_w - (INCMODE3_CAVE_VA - BINDC_CAVE_VA
+                                   + len(INCMODE3_CAVE_BYTES)))),
+            ("inchfp",
+             b"\x00" * (INCHFP_CAVE_VA - BINDC_CAVE_VA)
+             + INCHFP_CAVE_BYTES
+             + b"\x00" * (_bc_w - (INCHFP_CAVE_VA - BINDC_CAVE_VA
+                                   + len(INCHFP_CAVE_BYTES))))):
+        patches["bindccave"]["states"][_bz_key] = _bz_w
+        patches["bindccave"]["labels"][_bz_key] = (
+            "legacy R1-e/F3 cave payloads in this window (mutually "
+            "exclusive with --bind-c)")
+    # v3 dial-stamp hook at the dial wrapper entry (ch. 37 SS37.10): goto32 ->
+    # stamp tramp in the bindccave window; copies dialed BD_ADDR -> 0x1C000.
+    patches["bindcdial"] = {
+        "desc": "dial wrapper entry 0x01E600B4 -> DIAL stamp tramp (ch. 37)"
+                if bind_c else
+                "dial wrapper entry 0x01E600B4 (stock prologue)",
+        "va": BINDC_DIAL_HOOK_VA,
+        "new": BINDC_DIAL_HOOK if bind_c else BINDC_DIAL_STOCK,
+        "states": {"stock": BINDC_DIAL_STOCK, "bindc": BINDC_DIAL_HOOK},
+        "labels": {"stock": "stock: push {rets,r5,r4}; r1 = 0xB10",
+                   "bindc": "goto32 DIAL stamp tramp (records dialed addr "
+                            "at RAM 0x1C000, ch. 37 SS37.10)"},
+        "target": "bindc" if bind_c else "stock",
+        "ctx_va": BINDC_DIAL_HOOK_VA,
+        "ctx_base": BINDC_DIAL_STOCK,
+        "ctx_variant": _ctx_variant_fn(BINDC_DIAL_HOOK_VA,
+                                       BINDC_DIAL_HOOK_VA, BINDC_DIAL_STOCK),
+    }
+    # Recognition only (static): teach the families sharing the cave run
+    # about the bindc blob (all mutually exclusive via CLI).
+    patches["inchrdlcave"]["states"]["bindc"] = BINDC_CAVE_BYTES[:_ird_w]
+    patches["inchrdlcave"]["labels"]["bindc"] = (
+        "ch. 37 --bind-c cave occupies this window (mutually exclusive)")
+    patches["inchrdlcurcave"]["states"]["bindc"] = (
+        BINDC_CAVE_BYTES[_ird_w:_ird_w + _ic_w])
+    patches["inchrdlcurcave"]["labels"]["bindc"] = (
+        "ch. 37 --bind-c cave tail occupies this window (mutually exclusive)")
+    patches["r1cave"]["states"]["bindc"] = BINDC_CAVE_BYTES[54:104]
+    patches["r1cave"]["labels"]["bindc"] = (
+        "ch. 37 --bind-c cave occupies this window (mutually exclusive)")
+    patches["r1bcave"]["states"]["bindc"] = BINDC_CAVE_BYTES[54:132]
+    patches["r1bcave"]["labels"]["bindc"] = (
+        "ch. 37 --bind-c cave occupies this window (mutually exclusive)")
+    patches["cmd5tcave"]["states"]["bindc"] = BINDC_CAVE_BYTES[134:174]
+    patches["cmd5tcave"]["labels"]["bindc"] = (
+        "ch. 37 --bind-c cave occupies this window (mutually exclusive)")
+    patches["presstcave"]["states"]["bindc"] = (
+        BINDC_CAVE_BYTES[174:174 + len(PRESST_CAVE_BYTES)])
+    patches["presstcave"]["labels"]["bindc"] = (
+        "ch. 37 --bind-c cave occupies this window (mutually exclusive)")
     ck = "disabled" if no_cleanup_kick else "stock"
     patches["cleanupkickvar"] = {
         "desc": "app cleanup kick, variable-reason event (0x01E19AD0) -> %s" % ck,
@@ -3033,11 +3281,14 @@ def build_patches(duplex_mode=4, ptt2_action="PTT2", odptt_action="OD-PTT",
                 else b"\x00" * GATE_CAVE2_LEN),
         "states": {"native": b"\x00" * GATE_CAVE2_LEN, "gated": GATE_CAVE2_IMG,
                    "ledprobe": LEDPROBE_FIRE_BYTES
-                               + b"\x00" * (GATE_CAVE2_LEN - 44)},
+                               + b"\x00" * (GATE_CAVE2_LEN - 44),
+                   "bindc": BINDC_CAVE_BYTES[:GATE_CAVE2_LEN]},
         "labels": {"native": "erased (all zero)",
                    "gated": "gate stubs (flag test + replay + resume)",
                    "ledprobe": "LED-probe fire routine occupies this window "
-                               "(mutually exclusive)"},
+                               "(mutually exclusive)",
+                   "bindc": "ch. 37 --bind-c cave head occupies this window "
+                            "(mutually exclusive)"},
         "target": "gated" if gate_close else "native",
         "ctx_va": GATE_CAVE2_VA,
         "ctx_base": b"\x00" * GATE_CAVE2_LEN,
@@ -3237,7 +3488,8 @@ def build_patches(duplex_mode=4, ptt2_action="PTT2", odptt_action="OD-PTT",
                    "inchrdl": INCHRDL_CAVE_BYTES[:44],
                    "inchrdlbind": INCHRDL_CAVE_BYTES_BIND[:44],
                    "inchrdlcur": INCHRDL_CAVE_BYTES_CUR[:44],
-                   "inchrdlappswap": INCHRDL_APPSWAP_BYTES[:44]},
+                   "inchrdlappswap": INCHRDL_APPSWAP_BYTES[:44],
+                   "bindc": BINDC_CAVE_BYTES[:44]},
         "labels": {"native": "erased (all zero)",
                    "ledprobe": "LED fire: paint b[0xB301..0xB307]=0xFF, call "
                                "vendor renderer 0x01EB70CE -> resume 0x01E794E8",
@@ -3250,7 +3502,9 @@ def build_patches(duplex_mode=4, ptt2_action="PTT2", odptt_action="OD-PTT",
                    "inchrdlcur": "R6b redial-current cave head occupies "
                                  "this window (mutually exclusive)",
                    "inchrdlappswap": "R8 appswap cave head occupies this "
-                                     "window (mutually exclusive)"},
+                                     "window (mutually exclusive)",
+                   "bindc": "ch. 37 --bind-c cave head occupies this "
+                            "window (mutually exclusive)"},
         "target": "ledprobe" if led_probe else "native",
         "ctx_va": LEDPROBE_CAVE_VA,
         "ctx_base": b"\x00" * 44,
@@ -4084,6 +4338,28 @@ def main():
         "fire routine @0x01EA7722, task context). Use as an on-hardware "
         "execution marker for statically-predicted code paths.",
     )
+
+    ap.add_argument(
+        "--bind-c",
+        dest="bind_c",
+        action="store_true",
+        help="COMPILED-C BIND ROUTINE v4 (ch. 37 SS37.16): a DIAL-stamp "
+        "hook at the dial wrapper 0x01E600B4 records every radio-dialed "
+        "BD_ADDR (RAM 0x1C000); at the connect-complete tbh hook "
+        "0x01E61270, when an INCOMING join arrives with routing byte 1, "
+        "both conn slots live, and the joiner is NOT the last-dialed "
+        "record, the routine HCI-kicks the joiner and posts the dial "
+        "INNER cmd 1 DIRECTLY, USP(1,6,joiner) @0x01E1792E (v3b lesson: "
+        "the wrapper preamble posts 0x4A = TID-PTT SPP killer, and the "
+        "cmd-1 is_1t2 bail @0x01E17A2A drops the post in this conn-num=2 "
+        "build - the bail is NOP'd at site inchfpbail, R4-proven), so the "
+        "app-originated dial path binds audio clean. Compiled from "
+        "work/ch37/bind4_c.c with the open pi32v2 LLVM; 290 B cave "
+        "@0x01EA7722 (stamp tramp @0x01EA782A) + 4 B dial hook "
+        "@0x01E600B4 + 4 B bail NOP @0x01E17A2A; statics RAM 0x1C000. "
+        "Shares the tbh hook and the cave run with the gate/R1/R3-R8/"
+        "led-probe options; UNTESTED (verdict SS37.17).",
+    )
     ap.add_argument(
         "--no-cleanup-kick",
         dest="no_cleanup_kick",
@@ -4315,6 +4591,16 @@ def main():
             "--led-probe's fire routine (0x01EA7722..0x01EA774E) overlaps "
             "the gate/R1/redial cave windows; they cannot be combined."
         )
+    if args.bind_c and (args.incoming_redial or args.incoming_mode3
+                        or args.incoming_hfp or args.cmd5_target
+                        or args.gate_close or args.r1_conditional_kill
+                        or args.r1_walker_kill or args.d1_target_wait
+                        or args.led_probe):
+        raise SystemExit(
+            "--bind-c shares the tbh hook 0x01E61270 and the cave run "
+            "0x01EA7722..0x01EA7844 with the gate/R1/R3-R8/led-probe "
+            "options; they cannot be combined."
+        )
 
     PATCHES = build_patches(args.bluetooth_mode, a7, a8, args.conn_num,
                             args.no_kick, args.force_page_scan,
@@ -4329,7 +4615,8 @@ def main():
                             args.incoming_hfp,
                             args.incoming_redial, args.redial_bind,
                             args.redial_current, args.redial_bind2,
-                            args.redial_appswap, args.led_probe)
+                            args.redial_appswap, args.led_probe,
+                            args.bind_c)
 
     raw, app, app_start = load_app(args.src)
     print("source: %s (%d bytes)" % (args.src, len(raw)))
@@ -4382,6 +4669,8 @@ def main():
         extra += " --redial-appswap (multipoint R8)"
     if args.led_probe:
         extra += " --led-probe (LED debug probe, ch. 36)"
+    if args.bind_c:
+        extra += " --bind-c (compiled-C bind routine, ch. 37)"
     print("configuration: --bluetooth-mode %d --PTT=%s --PTT2=%s --OD-PTT=%s%s\n"
           % (args.bluetooth_mode, ptt_action, a7, a8, extra))
 
@@ -4450,6 +4739,8 @@ def main():
         wanted += ["inchrdlcurcave"]
     if args.led_probe:
         wanted += ["ledprobefire"]
+    if args.bind_c:
+        wanted += ["bindchook", "bindccave", "bindcdial", "inchfpbail"]
     wanted = list(dict.fromkeys(wanted))
     if ({"pfbody7", "pfbody8", "pfrelease", "pflabels"} & set(wanted)
             and PF_LITERAL_PATCHES & set(wanted)):
