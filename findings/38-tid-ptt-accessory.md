@@ -318,3 +318,74 @@ notifications subscribed, and capture-confirmed benign protocol identification
 traffic (or an official-app session capture). Do not send E2/E3/E7 or firmware
 blocks blindly. Establish OTA capability separately from any USB-mode switch;
 no boot transition, device probe, or flash was executed in this review.
+
+## §38.22 Programming-cable image: external data path, not yet flash readback (2026-11-17)
+
+User supplied the vendor's [wireless-programming image](https://tidradio.com/cdn/shop/files/3_in_1_Wireless_PTT_Button_for_ODmaster_APP_Mic_Programmer_Adapt_to_H3_Plus_Bluetooth_Hands-Free_Speaker_Mic_for_PoC_Radio_Mobile_Phone_In-Car_Wireless_Speaker_Mic_for_Car_Motorcycle_Outdoor_Two-Way_Radio_Speaker_Mic_Bicycle_Helmet.jpg?v=1745656161&width=1920).
+Visual inspection: TD-UV5R radio, Kenwood-style side connector, cable into the
+PTT's top port, and phone displaying channel/settings programming. This is
+marketing evidence of an intended external **data** connection, not a measured
+pinout, a visible CH340, or proof of USB-host implementation.
+
+Two distinct candidate topologies remain:
+
+1. Phone → Bluetooth → PTT USB host → USB/UART chip in cable → radio UART.
+   A genuine CH340 cable functioning here would establish a USB-host path and
+   suitable host driver, but NOT USB-device/HID boot support or flash readback.
+2. Phone → Bluetooth → PTT UART → passive cable using a USB-shaped connector →
+   radio UART. This would expose an external serial path without opening the
+   puck; whether those same pins offer boot-ROM download/debug is UNKNOWN.
+
+**New extraction leads, all UNTESTED on the PTT:**
+
+- Identify the cable independently: does it enumerate on a PC, and if so with
+  which VID/PID? An actual CH340 normally reports WCH VID 0x1A86 (PID varies).
+  A negative result alone does not establish a passive cable or its pinout.
+- Passively observe a successful ODmaster **read-from-radio** session (phone HCI
+  capture; optionally a correctly connected high-impedance serial/USB analyzer).
+  Identify bridge configuration, baud changes, local management commands and any
+  update/version exchange. Radio-memory reads are NOT PTT-memory reads.
+- If a UART pinout is verified, passively capture PTT power-on traffic with the
+  proper voltage level. A boot log or loader handshake could identify a serial
+  recovery route. App UART pins need not be the ROM downloader pins; do not
+  inject 5 V/RS-232 or connect unknown connector pins to an adapter.
+- Inspect the official app's firmware assets/update logic, or a legitimate
+  accessory-update capture, for a PTT-specific image and transport. A distributed
+  update image may be encrypted/partial and is not necessarily a device dump.
+
+Local SDK evidence: `../fw-AC630N_BT_SDK/apps/common/update/update.c:312–325`
+implements `UART_UPDATA` with baud/TX/RX parameters. This establishes a JieLi SDK
+mechanism, NOT its inclusion, accessible entry, pin mapping, or readback support
+on this unidentified PTT SoC/build. No CH340-specific source match was found in
+that SDK checkout; absence there does not rule out vendor additions.
+
+**Verdict:** this materially improves the no-opening investigation: identify the
+cable and capture the working programming protocol before further blind RCSP
+probes. A serial bridge alone cannot address its own MCU flash; an explicit
+read-memory/debug/loader capability is still required. No hardware commands,
+boot transitions, or flashing were performed for this analysis.
+
+## §38.23 Dated corrections to §38.7 and §38.8 (2026-11-17, ch. 39 §39.4)
+
+**Correction 1 — §38.7 "events only flow on PTT-originated links" is NOT supported
+by the record.** §9A.19/§9A.20 (2026-09) captured `+SPP=P/R` from this same button
+(`6F:E5:E7:FB:12:4F`) over a **PC-originated** link. The two runs differed in every
+variable that matters (comparison table: ch. 39 §39.4):
+
+| Variable | §9A.19/20 (events ✅) | §38.7 (no events ❌) |
+|---|---|---|
+| Tool/handshake | `bt_ag_capture.py --connect` (full AG SLC) | raw `rfcomm connect` — no AG handshake |
+| Channel | brute-force 1–30, first opener | pinned ch2 (SDP returned nothing) |
+| Bond | `pair` + `trust` first | unpaired, pairing-blink |
+| Link security | bonded → encrypted | blink link, no bond |
+
+Working hypothesis (UNTESTED): the discriminator is the **link security/bond state**
+(possibly + AG SLC), not the connection direction. Re-test card **P0.2** issued
+2026-11-17 (procedure in the ch. 39 §39.11 / session card); verdict to be appended
+here when results return.
+
+**Correction 2 — §38.8's JieLi verdict was already in the record.** §9A.20's
+peer-identity snapshot (2026-09, ch. 09) lists "Manufacturer: Zhuhai Jieli
+Technology (1494), LMP 5.3, subversion `0x22bb`". §38.8 (2026-11-16) re-derived the
+same facts via `hcitool info` without crediting ch. 09. The verdict stands; the
+priority is corrected here.

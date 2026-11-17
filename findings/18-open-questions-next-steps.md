@@ -27,6 +27,11 @@ SDK E3 does not select USB update; E2 may initiate loader download, so earlier
 "harmless E1/E2" probe labels must not be relied on. Vendor advertises a wired
 radio-programming accessory cable; charging-only/native-USB pinout is unproven.
 
+**2026-11-17 cable-image follow-up:** [Ch. 38 §38.22](38-tid-ptt-accessory.md#3822-programming-cable-image-external-data-path-not-yet-flash-readback-2026-11-17)
+separates USB-host/CH340 from direct UART through a USB-shaped connector.
+Identify the cable and capture a working ODmaster read session; neither radio
+configuration readback nor SDK UART-update support proves PTT flash readback.
+
 > **ROUTE 2026-11-15: the radio-side bind route is CLOSED (§37.17/§37.19, 12 levers). The live frontier moved to the accessory: [Ch. 38 — the TID-PTT accessory, make it PAGE](38-tid-ptt-accessory.md).**
 > **PLAN OF RECORD 2026-10-21: [Ch. 30 — the Two-Device Plan](30-two-device-plan.md).**
 > **Goal clarification (user, verbatim):** *"It's not rescoped — it was never intended in

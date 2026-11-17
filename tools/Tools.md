@@ -59,7 +59,7 @@ All paths below are relative to the repo root.
 5. [General binary inspection](#5-general-binary-inspection)
    - [`analyze.py`](#51-analyzepy) · [`strings.py`](#52-stringspy) · [`region.py`](#53-regionpy) · [`hexdump.py`](#54-hexdumppy) · [`headers.py`](#55-headerspy) · [`pedump.py`](#56-pedumppy)
 6. [Bluetooth test rig (Linux)](#6-bluetooth-test-rig-linux)
-   - [`bt_be_headset.sh`](#61-bt_be_headsetsh-) ⭐ · [`bt_spp_hold.py`](#62-bt_spp_holdpy-) ⭐⭐ · [`bt_spp_ptt.py`](#63-bt_spp_pttpy) · [`bt_ag_capture.py`](#64-bt_ag_capturepy) · [`bt_hf_sim.py`](#65-bt_hf_simpy) · [`bt_audio_check.sh`](#66-bt_audio_checksh) · [`bt_wait_and_pair.sh`](#67-bt_wait_and_pairsh) · [`bt_multipoint_probe.py`](#68-bt_multipoint_probepy)
+   - [`bt_be_headset.sh`](#61-bt_be_headsetsh-) ⭐ · [`bt_spp_hold.py`](#62-bt_spp_holdpy-) ⭐⭐ · [`bt_spp_ptt.py`](#63-bt_spp_pttpy) · [`bt_ag_capture.py`](#64-bt_ag_capturepy) · [`bt_hf_sim.py`](#65-bt_hf_simpy) · [`bt_audio_check.sh`](#66-bt_audio_checksh) · [`bt_wait_and_pair.sh`](#67-bt_wait_and_pairsh) · [`bt_multipoint_probe.py`](#68-bt_multipoint_probepy) · [`bt_ptt_emulator.py`](#69-bt_ptt_emulatorpy-) ⭐
 7. [Verification & regression suites](#7-verification--regression-suites)
    - [`verify_cli.py`](#71-verify_clipy) · [`verify_actions.py`](#72-verify_actionspy)
 8. [Typical workflows](#8-typical-workflows)
@@ -1136,6 +1136,33 @@ while a device is connected. Policy: one active device; radio-initiated joins ev
 incoming connections are refused at the page level. The ceiling is the app's
 single-active-device policy, not the stack.
 Details: [§9B.6.1](../findings/22-bluetooth-7-multipoint-architecture.md).
+
+### 6.9 `bt_ptt_emulator.py` ⭐
+
+**What:** software TID-PTT button — a PC/BlueZ RFCOMM **SPP server on channel 2** that
+reproduces the real button's behavior and quirks (ch. 38/39): advertises name
+`TID-PTT000000-E` (`--name` to override; keep the `TID-PTT` prefix — the radio's
+classifier is name-based) with CoD `0x240404`, **never pages** (pure peripheral like the
+real button), sends `+SPP=P\x00` on press and the double `+SPP=R\x00` on release
+(§9A.20), and **drops the whole ACL when the radio closes the SPP channel** (the button
+quirk that killed the R-series teardown paths) — suppress with `--hold-acl` to emulate a
+patched button (ch. 39 §39.6 step 2.4b). Interactive keys `Enter`/`p`/`r`/`s`/`q` plus
+`--cycle HOLD GAP` auto mode; logs everything the radio sends (`AT+MPTT` notifications).
+Setup (`btmgmt power on/name/class` + `hciconfig hci0 piscan`) runs automatically;
+skip with `--no-setup`.
+
+**Why:** Phase 1.2 of the [two-device master plan](../findings/39-two-device-master-plan.md)
+— every Route A/B patch must be exercised against this emulator (with `btmon`) before it
+touches a radio image, and the emulator itself is validated against the real button on S1
+(identical kick + rejoin signature on btmon).
+
+**Usage:**
+
+```
+sudo python3 tools/bt_ptt_emulator.py [--name TID-PTT000000-E] [--cycle 1 4] [--hold-acl] [--no-setup]
+```
+
+Then dial it from the radio (menu Connect / auto-reconnect), exactly like the real button.
 
 ---
 
