@@ -172,3 +172,149 @@ Access reality (§38.6): USB data lines ARE wired (full-speed attach seen) but n
 - [x] Chipset verdict → branch: **JieLi = best case (§38.8)**
 - [ ] Open puck: SoC die marking + pad inventory (photos) → download-protocol choice
 - [ ] Dump (if read-protect OFF) → connect-policy statics → patch design
+
+## §38.9 Over-the-air door: stock JieLi RCSP found on the PTT (2026-11-16, no-open constraint)
+
+User will NOT open the puck ⇒ firmware access must be over-the-air. SDK dig (`/home/stefan/h3plus/fw-AC630N_BT_SDK`):
+
+1. **The PTT's AE00 GATT group is BYTE-IDENTICAL to the SDK's `RCSP_BTMATE_EN` block** (`apps/common/third_party_profile/jieli/le_at_com.h`): PRIMARY ae00 @0x0080, ae01 WRITE_NO_RSP vh **0x82**, ae02 NOTIFY vh **0x84**, CCCD 0x85 — exactly what round 3 read off the PTT. ⇒ the PTT runs **stock JieLi RCSP ("bt mate") over LE**; its SPP ch-2 server is the prime suspect for RCSP-over-BR/EDR.
+2. **RCSP framing** (`include_lib/ai_stack/JL_rcsp/JL_rcsp_packet.h`): `FE DC BA | head u16 (opcode b7:0, _resp b14, _type b15) | len u16 | data | EF` — no CRC field.
+3. **RCSP OTA command set** (`rcsp_updata/rcsp_user_update.h`): `0xE1` get-update-file-info-offset · `0xE2` inquire-if-can-update · **`0xE3` ENTER_UPDATE_MODE — the device reboots into the RCSP uboot download mode over Bluetooth** · `0xE4` exit · `0xE5` send-fw-update-block · `0xE6` refresh-status · `0xE7` reboot · `0xE8` notify-content-size. Update gate = VID/PID match + higher VER from the device ex_cfg (`judge_remote_version_can_update`); stock flow shows **no authentication** on these opcodes (OEMs may add a des/auth layer — unknown for TID).
+4. The radio's own app contains "rcsp" (@0x01E9BB7E) and advertises the same ae00/ae30 family ⇒ **the radio is a safe RCSP testbed** (reflashable) — probe framing on the radio first if PTT replies are ambiguous.
+5. "Trigger uboot via Bluetooth while USB connected": the ROM does not listen over BT, but RCSP 0xE3 gets the APP to reboot into the bootloader's RCSP/USB update mode — effectively yes, if the PTT firmware includes `RCSP_UPDATE_EN`.
+
+**Round-5 probe `work/ch38d_ptt_rcsp_probe.sh` (sudo, PTT blinking, radio OFF):** sends ONLY harmless queries E1/E2 (never E3) in 4 framing variants (head LE/BE × SN) to SPP ch2 and to BLE ae01+ff02 with notifications armed; a `FE DC BA…EF` reply = RCSP alive = firmware path open (dump still impossible OTA — but WRITE-UPDATE is: build SDK app or patched image with matching VID/PID, push via E3/E5; and the official TIDRADIO phone app, if it updates this PTT, proves an unauth-or-crackable OTA channel exists).
+
+## §38.4 checklist (updated again)
+- [x] Round 4 — JieLi verdict (§38.8)
+- [ ] User constraint logged: NO opening → OTA only (§38.9)
+- [ ] Round 5 RCSP probe (`work/ch38d_ptt_rcsp_probe.sh`) — framing reply on SPP ch2 / BLE ae01?
+- [ ] If RCSP alive: VID/PID read (E1/E2 replies) → update-image strategy (SDK build vs patched-official)
+
+## §38.10 Round 5 RCSP probe results (2026-11-16 evening, logs ch38d_rcsp_20261116_201603/201938/202244/202303)
+
+- Script bugs found+fixed: bash `local a=1 b=$a` expansion gotcha (unbound `tag`), literal spaces in the SPP frame writes, and **BlueZ 5.85 gatttool has no `--char-write-cmd` long option** (the BLE writes never went out — the BLE half of RCSP is still UNTESTED, not negative).
+- **SPP ch 2: connects (blink-synchronized; "Host is down" whenever the PTT left page-scan) but returns ZERO bytes to E1/E2 in 4 framings** (head LE/BE, len1/len2) ⇒ ch2 is NOT an answering RCSP server (dangling SPP server, or needs the official app's session/handshake first).
+- Positive tell: **CCCD writes to 0x0085 (ae02) and 0x0007 (ff01) SUCCEEDED** — handle 0x0085 existing exactly where the SDK's `RCSP_BTMATE_EN` table puts the ae02 CCCD corroborates the stock-RCSP GATT layout on the live device.
+- BR/EDR page-scan confirmed blink-only in practice (LE advert stays up after blink; pages then fail) — all SPP attempts must be re-blink-synchronized.
+- **Round 5b = `work/ch38e_ptt_rcsp_probe.sh`**: single interactive gatttool session (subscribe ae02/ff01 + `char-write-cmd` frames to ae01/ff02 + capture notifications on ONE connection — the real, still-untested RCSP path) then blink-synced SPP retry loop (3 attempts). E1/E2 only — cannot reboot the device.
+
+## §38.11 Round 5b results + POWER-CYCLE REVEALING REMARK (2026-11-16 late evening)
+
+- ch38e run (log ch38e_rcsp_20261116_202821): BLE section LOST its commands — gatttool -I consumed the heredoc stdin before the link established (prompt printed, zero command echoes, GLib-CRITICAL warning) ⇒ BLE RCSP STILL untested (3rd script bug, not a device negative). SPP attempts: rfcomm printed "Connected … on channel 2" then instant "Disconnected" twice (PTT accepted the page while blinking, then dropped the session — single-SPP-server quirk or leftover link), attempt 3 "Device or resource busy" (stale rfcomm9 binding), user Ctrl-C'd.
+- **USER REMARK (verbatim): "Poweroff / restart is really really really hard as it needs to be out of range"** — the PTT will not power-cycle/behave while its bonded host (the PC dongle, bonded since round 3) is in range. This STRONGLY suggests the PTT does not sit passive when powered on near a remembered host: either it pages that host itself, or the PC-side link re-grabs it instantly. If the PTT *can* page its remembered host, the §37.19 "pure peripheral, never pages" model needs correction — and the MIRROR scenario (radio dials Jabra = audio binds natively; PTT pages IN to the radio = free SPP session) may work on **stock S1 with ZERO further patching**. OPEN QUESTION to user: when powered on in range of the PC dongle (dongle on, nothing running), does the PTT connect to the PC by itself?
+- ch38f round-5c probe: FIFO-held interactive gatttool (commands sent 8 s after connect, 2 s spacing; subscribe ae02/ff01 → E1/E2 to ae01 then ff02 → readback), section 2 optional blink-synced SPP retry on fresh port rfcomm10 with release-first. E1/E2 only — harmless.
+
+## §38.12 Power-on behavior ANSWERED (2026-11-17): pure peripheral CONFIRMED
+
+User question (question tool): "PTT powered ON, PC dongle on + in range, no scripts — what happens?" → **"It just blinks / stays idle."** The PTT does NOT page its remembered host; §37.19 model stands (joins only when a host dials it). The earlier "power-cycle needs out-of-range" is the connected-state quirk (3 s hold behaves differently while a link is up), not hidden paging. ⇒ Mirror scenario requires the PTT to learn paging = **PTT-side firmware patch via OTA (RCSP) remains the only route**; BLE RCSP test still pending (never executed — ch38f is the corrected attempt, FIFO-timed interactive gatttool, E1/E2 harmless queries only).
+
+## §38.13 Round 5c (ch38f) failure post-mortem + ch38g fix (2026-11-17)
+
+ch38f run (log ch38f_rcsp_20261117_004416): (a) `char-desc-write-req` → "command not found" (correct gatttool verb is **`desc-write-req`**); (b) every write after → "Command Failed: **Disconnected**" — **interactive gatttool does NOT auto-connect; the script never sent `connect`** (bug #5 — this is why BLE was never really tested across ch38d/e/f). §2 SPP: rfcomm10 connected to blinking PTT ("paired" per user), instant Disconnect again (ch2 dangling confirmed 3rd time).
+
+**ch38g (`work/ch38g_ptt_rcsp_probe.sh`)**: FIFO session + explicit `connect` (8 s settle, one retry after re-blink prompt), then `desc-write-req 0x0085/0x0007 0100` (subscribe ae02/ff01), `char-write-cmd 0x0082` E1_LE/E1_BE/E2, `char-write-cmd 0x0009` E1/E2 (TID variant), `char-read-hnd 0x0009`, 8 s hold for late notifications, full gatttool output dumped. E1/E2 only — harmless. bash -n OK.
+
+## §38.14 Round 5d (ch38g) — LE LINK ESTABLISHED; frames sent (2026-11-17)
+
+Log ch38g_rcsp_20261117_005124: **`Attempting to connect … Connection successful`** — the PTT LE side accepts connections (blinking). All 5 `char-write-cmd` frames + read executed with NO gatttool error ⇒ frames went on the wire to ae01 (0x0082) and ff02 (0x0009). BUT: `desc-write-req`/"command not found" — this gatttool build has NO descriptor command ⇒ CCCDs never subscribed ⇒ notifications invisible even if sent; `char-read-hnd 0x0009` printed NO value (no reply or lost); gatttool segfaulted at exit (known quirk, after all commands — harmless). No visible RCSP answer = INCONCLUSIVE (write-cmd is fire-and-forget; no notify path armed).
+
+**ch38h (round 5e)**: same session + (a) CCCD subscribe via `char-write-req` to handles 0x0085/0x0007 (valid ATT), (b) E1/E2 to ff02 via write-REQ (ff02 supports write → ATT success/error reply = device-alive proof), (c) **btmon captured in parallel** — every ATT PDU logged (link-layer ACKs of the write-cmds, any Notification/Indication, error responses). Verdict logic in script footer.
+
+## §38.15 ROUND 5e btmon post-mortem — TWO MAJOR FINDINGS (2026-11-17)
+
+Full /tmp/ch38h_btmon.txt read (523 lines, capture t=0..28 s):
+
+**FINDING A — THE PTT PAGES ITS BONDED HOST WHILE BLINKING.** At t=0.803 s (before any of our commands) an **incoming** `HCI Event: Connect Request (0x04)` arrived FROM `6F:E5:E7:FB:12:4F` — the PTT paged the PC while in pairing blink. PC accepted; the PTT then opened SDP as a CLIENT (PSM 1) and searched for **Handsfree Audio Gateway (0x111f)** — PC answered RFCOMM ch 13. The PTT is a headset-class ACTIVE device (CoD Wearable Headset was literal): in pairing-blink state it pages its remembered host and hunts HFP AG. (User's earlier "power-on = just blinks, idle" was plain power-on WITHOUT the pairing blink — different state.) ⇒ **MIRROR TEST (zero patches): with the S1 radio holding the Jabra (radio-dialed = audio bound), blink the PTT. If it pages the radio and lands as incoming joiner, the goal may work TODAY** — incoming joins are accepted by the E7-ref radio (§30.14.17, P7 once/boot), the SPP session is free (Jabra uses none), and the radio's name classifier knows "TID-PTT" (mode 3/4). Caveats: PTT may hunt HFP-AG only (radio IS an HFP AG ch 6 — it would connect that); whether BT-PTT keying then rides SPP or the HFP hook is the open question — the test answers it.
+
+**FINDING B — THE LE LINK KILLER WAS OUR OWN bluetoothd.** LE connect succeeded t=2.73; PTT sent Exchange-MTU ×2 (2.77/2.81) then idle; at t=4.88 **the PC's bluetoothd issued `Disconnect (reason 0x13)`** on handle 16 — its connection/pairing-agent policy against the bonded device tears down gatttool's "unwanted" LE link ~2 s after it comes up. Every command in ALL rounds (5c/5d/5e) was sent AFTER that teardown ⇒ BLE RCSP has still never been tested; gatttool's silent no-error output = writing into a dead connection. FIX: `systemctl stop bluetooth` (+ `hciconfig hci0 up`) around the gatttool session — raw ATT needs no daemon ⇒ `work/ch38i_ptt_rcsp_probe.sh` (round 5f).
+
+## §38.4 checklist (updated)
+- [x] Round 5e btmon: PTT pages bonded host in blink (FINDING A) + bluetoothd LE-kill root cause (FINDING B)
+- [ ] MIRROR BLINK TEST on S1 (radio holds Jabra, blink PTT) — §38.15-A, zero-patch goal candidate
+- [ ] Round 5f BLE RCSP (`work/ch38i_ptt_rcsp_probe.sh`, bluetoothd stopped)
+- [ ] Verdict → branch (goal-native / OTA design / stop-at-S1 vs ESP32)
+
+## §38.16 Round 5f post-mortem + round 5g (bluetoothd-owned approach) (2026-11-17)
+
+ch38i (bluetoothd-stop attempt): LE connected t=1.97, PTT sent Exchange-MTU ×2, **local host Disconnect at t=4.08 again** — bluetoothd SURVIVED `systemctl stop` (start at script end errored "Unit bluetooth.service is masked" — the unit is masked on this host, daemon evidently dbus-socket-activated; it came back active 01:19:53). All commands again post-mortem. btmon wrote btsnoop binary (`-w`) — decoded with `btmon -r`: no ATT writes ever reached the wire; only the 2 MTU exchanges. **BONUS RE-CONFIRM: BR/EDR handle 1 = the PTT paged the PC AGAIN during this run** (local-host-cleanup disconnect at 20.8 s) — Finding A (§38.15: PTT pages bonded host while blinking) reproduced.
+
+**Round 5g `work/ch38j_ptt_rcsp_probe.sh`**: stop fighting the daemon — connect THROUGH bluetoothd (`bluetoothctl` FIFO session: `connect` → `menu gatt` → `select <ae02/ff01 UUID>` + `notify on` → `select ae01/ff02` + `write fedcbae1…/fedcbae2…`); bluetoothd never kills its own connection. btmon captured as TEXT (`btmon > file`). E1/E2 only — harmless.
+
+**PRIORITY NOTE**: the §38.15-A MIRROR BLINK TEST (S1 radio holding Jabra + blink PTT near it → does it page in? does BT-PTT key? does Jabra survive?) is the zero-patch goal candidate and outranks the RCSP probe — needs the S1 flash first (`sudo bash work/ch32_bt_e7.sh`).
+
+## §38.4 checklist (updated)
+- [x] Round 5f: bluetoothd survives stop (masked/dbus-activated) — link killed again; PTT page re-confirmed
+- [ ] MIRROR BLINK TEST on S1 (§38.15-A) — zero-patch goal candidate
+- [ ] Round 5g BLE RCSP via bluetoothctl gatt (`work/ch38j_ptt_rcsp_probe.sh`)
+- [ ] Verdict → branch
+
+## §38.17 Round 5g post-mortem + round 5h (2026-11-17 morning)
+
+ch38j: `connect` → "Device 6F:E5:E7:BC:39:37 not available" (LE side not in bluetoothd's view — no scan was run; PTT possibly off or advertising window missed) and `select` → "Invalid command in menu gatt" (5.85 uses **select-attribute**); btmon (text) shows ZERO ATT/LE events — no link, round void. bluetoothctl 5.85 gatt-menu syntax captured from its own help: `select-attribute <UUID>`, `write <data=xx xx ...> [offset] [type]`, `notify <on/off>`, `acquire-notify`.
+
+**Round 5h `work/ch38k_ptt_rcsp_probe.sh`**: `scan on` + 8 s before `connect`; correct `select-attribute`/`write data=…` syntax; same E1/E2 frames to ae01+ff02, notify armed on ae02+ff01; btmon text capture. E1/E2 only — harmless.
+
+STATUS REMINDER: the §38.15-A **MIRROR BLINK TEST** (S1 radio + Jabra dialed + blink PTT) has NOT been run yet — it remains the zero-patch goal candidate and outranks the RCSP probe. Radio may still be on v4 `b91b3535` (must-not-ship) → S1 installer `sudo bash work/ch32_bt_e7.sh`.
+
+## §38.18 Round 5h (ch38k) post-mortem — root cause of the LE teardown: dual-mode bond policy
+
+ch38k run (log ch38k_rcsp_20261117_085904): bluetoothctl-owned connect **succeeded** (`Connection successful` + `ServicesResolved: yes`) then **local-host disconnect ~1 s later** — before the first `select-attribute` ("No device connected" ×4; zero ATT writes on the wire, btmon shows 3× Exchange-MTU then Disconnect at 16.86 s). Diagnosis: the PTT is a **dual-mode device bonded on its BR/EDR side** (our round-3 rfcomm pairing); BlueZ resolves the LE side, recognizes the classic bond, attempts classic profile bring-up, fails (BR/EDR ignores pages when idle) and tears the LE link down. Round 5i `work/ch38l_ptt_rcsp_probe.sh`: `remove` BOTH addresses first (PC-side bonds are our own probe artifacts, safe to delete and re-create), then the same notify+write sequence; if writes now answer `Error Response 0x05 (Authentication Required)` → pair the LE side and retry. E1/E2 only — harmless. **Reminder: the MIRROR BLINK TEST (§38.15) is still the top-priority run — it may reach the goal with zero patching.**
+
+## §38.19 Round 5i (ch38l) post-mortem — the teardown culprit: the PTT's own classic paging storm
+
+Full log read: at script start the **PTT-B classic side was already CONNECTED to the PC** (bluetoothctl prompt named it; `remove` had to disconnect it) — the blinking PTT had paged the PC (Finding A live again). During the run `LegacyPairing` flaps yes/no every ~2 s = the PTT repeatedly pages/pair-requests the PC. The LE connect itself succeeded (`Connection successful` + `ServicesResolved: yes`) but the link died ~1 s later — **the concurrent incoming BR/EDR pairing storm is the teardown agent** (BlueZ dual-mode identity/profile handling), not the bond itself. Also: my "link dropped" early-check was a false positive (grepped the removal disconnect).
+
+Round 5j `work/ch38m_ptt_rcsp_probe.sh`: (1) PTT in **plain power-on** — no blink ⇒ no paging; its LE advert (flags 06 = general-discoverable/connectable) stays up regardless; (2) brief scan to seed the device then **`scan off`** ⇒ page scan disabled, classic pages cannot reach us even if it blinks; (3) outgoing LE connect + notify + E1/E2 writes as before; drop-check fixed (marker after connect). E1/E2 only — harmless. If bluetoothctl refuses connect with discovery off, re-run with the PTT blinking and accept the storm risk (fallback noted).
+
+Checklist: [x] rounds 5e–5i post-mortems; [ ] round 5j run; [ ] RCSP verdict (reply / auth-required / dormant).
+
+## §38.20 Round 5j full-capture read (2026-11-17): PTT PAGES PERSISTENTLY — even plain power-on
+
+Full /tmp/ch38m_btmon.txt (711 KB) read directly:
+1. **t=7.6 s: incoming BR/EDR Connect Request from 6F:E5:E7:FB:12:4F** — ~1 s after our `scan on`, from a **PLAIN-powered PTT (no blink)**. We accepted (Accept Connection Request 7.627, Connect Complete 7.815) then it died at 8.05 with **Reason: PIN or Key Missing (0x06)** — the PC-side bond had just been `remove`d by the script, the PTT still holds ITS key and tried to re-link encrypted. ⇒ **The PTT pages its remembered host continuously, not only while blinking.** Earlier "plain power-on = idle" was an artifact: with PC page-scan off the pages simply never landed and nothing was visible. Round 5i's LegacyPairing-flap = same storm.
+2. LE side: our LE Create Connection at 27.34 → Connection Complete 27.36 → 3× Exchange-MTU + 1 response → **zero ATT write PDUs on the wire** → local Disconnect (bluetoothctl quit) at 29.48. The gatt-menu writes failed INSIDE bluetoothctl (its stdout was never captured — script flaw): select-attribute ran before ServicesResolved populated (~1 s after connect), so `write` had no selected attribute. **RCSP still untested (8th attempt)** — but see priority below.
+
+**CONSEQUENCE — the mirror scenario is MORE alive than thought, with a bond-priming sequence:**
+- PTT remembers ONE host (symmetric to the radio's single last-device register); whatever device last connected to it becomes its page target. Right now that is the PC (bond gone on PC side ⇒ its pages fail 0x06 harmlessly).
+- If the RADIO becomes the PTT's last host (radio dials PTT once — stock behavior), then on next power-cycle the PTT should page the RADIO persistently. Radio S1 accepts incoming joins while connected (§30.14.17, --force-page-scan, --no-kick, 2-slot).
+- CAVEAT (btmon evidence): while paging, the PTT's only observed client behavior is **SDP search for HFP AG (0x111f)** — the radio never answers SDP (known fact) and the PTT has never needed to be an SPP *client* (stock flow: radio dials PTT, radio = SPP client to PTT's ch-2 server). Whether the PTT opens SPP to the radio after an incoming page = THE open question the blink test answers.
+
+**MIRROR PRIME+PAGE TEST (zero scripts, top priority over RCSP):**
+1. S1 flashed; power radio; menu-connect **TID-PTT** (radio dials PTT ⇒ PTT's remembered host = radio). Verify BT-PTT keys.
+2. Menu-connect **Jabra** (radio dials Jabra; E6-proven the SPP incumbent survives a radio-originated headset dial). Verify audio on Jabra.
+3. Power-cycle the PTT (out of range first if needed) and bring it near the running radio. Observe: does the PTT join by itself (page storm hits radio's page-scan)? Does BT-PTT key with Jabra up? Does Jabra survive? Any echo?
+
+## §38.21 Bluetooth-triggered boot entry: OTA is not USB download mode (2026-11-17)
+
+**Verdict: plausible Bluetooth OTA entry, but NO verified Bluetooth command to enter
+the PTT's USB-HID/UBOOT downloader.** This corrects the stronger claims in §38.9.
+
+- Re-read local SDK source `apps/common/third_party_profile/jieli/JL_rcsp/rcsp_updata/rcsp_user_update.c`
+  in `../fw-AC630N_BT_SDK`: `MSG_JL_ENTER_UPDATE_MODE` (lines 435–454, opcode E3)
+  disables connect/scan and, for dual-bank builds, initializes `DUAL_BANK_UPDATA`.
+  The separate update-start path (419–432) selects `BLE_APP_UPDATA` or
+  `SPP_APP_UPDATA`, NOT `USB_UPDATA`. E3 is therefore not a generic "reboot into
+  USB bootloader" instruction, and need not immediately reboot at all.
+- **Probe-safety correction:** the E2 handler (360–391) can post
+  `MSG_JL_LOADER_DOWNLOAD_START` on single-bank builds; its version-check block is
+  compiled out (`#if 0`) in this SDK copy. Earlier descriptions of E1/E2 as
+  categorically harmless/read-only, and of a mandatory VID/PID/version gate, are
+  not justified. No such behavior has been confirmed on the PTT.
+- The AE00/AE01/AE02 handle layout is consistent with the SDK's RCSP transport,
+  but does NOT prove the PTT includes an enabled RCSP parser, OTA handler, or
+  USB-update transition. Latest capture (§38.20) still has zero ATT write PDUs;
+  no valid RCSP response has yet been established.
+- The [vendor product page](https://tidradio.com/products/tidradio-wireless-ptt-button)
+  explicitly advertises an included connecting cable and BL-1-style wireless
+  programming of other radios. Thus "charging-only port" is not established by
+  the marketing or failed enumeration. A USB-shaped connector can carry a
+  non-USB programming interface; pinout and native USB boot support remain
+  UNKNOWN. The observed USB errors alone do not establish a working data path
+  to the SoC or its bootloader.
+
+Next evidence needed: a stable BLE connection with ServicesResolved complete,
+notifications subscribed, and capture-confirmed benign protocol identification
+traffic (or an official-app session capture). Do not send E2/E3/E7 or firmware
+blocks blindly. Establish OTA capability separately from any USB-mode switch;
+no boot transition, device probe, or flash was executed in this review.

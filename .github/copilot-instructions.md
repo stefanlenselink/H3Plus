@@ -279,6 +279,13 @@ scripts here, and none should be added.
 
 ## Current state & open frontiers (as of 2026-11-10)
 
+**2026-11-17 correction — PTT boot entry:** findings/38 §38.21 supersedes §38.9's
+claim that RCSP E3 enters USB boot mode. Inspected SDK selects Bluetooth/dual-bank
+OTA, not USB; PTT RCSP support and USB-HID entry remain UNVERIFIED. E2 can start
+loader download on single-bank builds: do not call E1/E2 probes categorically
+harmless. Vendor advertises a radio-programming cable, so the port's pinout and
+native USB capability remain unknown, not proven charging-only.
+
 Done: both ciphers broken · classifier decoded · routing modes 1–6 mapped · key-remap
 patches HW-confirmed (BT-mic PTT, duplex) · patch tool + 2 test suites green ·
 multipoint architecture mapped (ch. 22) · **BT-PTT2 hardware-confirmed** (ch. 23:

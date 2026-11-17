@@ -21,6 +21,12 @@ Configuration workarounds are **ruled out** — `BT Int Mic` has no effect on a 
 
 ### Priority 1b — The PTT-button + separate-headset stretch goal
 
+**2026-11-17 boot-entry clarification:** [Ch. 38 §38.21](38-tid-ptt-accessory.md#3821-bluetooth-triggered-boot-entry-ota-is-not-usb-download-mode-2026-11-17)
+distinguishes candidate RCSP Bluetooth OTA from unproven USB-HID boot entry.
+SDK E3 does not select USB update; E2 may initiate loader download, so earlier
+"harmless E1/E2" probe labels must not be relied on. Vendor advertises a wired
+radio-programming accessory cable; charging-only/native-USB pinout is unproven.
+
 > **ROUTE 2026-11-15: the radio-side bind route is CLOSED (§37.17/§37.19, 12 levers). The live frontier moved to the accessory: [Ch. 38 — the TID-PTT accessory, make it PAGE](38-tid-ptt-accessory.md).**
 > **PLAN OF RECORD 2026-10-21: [Ch. 30 — the Two-Device Plan](30-two-device-plan.md).**
 > **Goal clarification (user, verbatim):** *"It's not rescoped — it was never intended in
