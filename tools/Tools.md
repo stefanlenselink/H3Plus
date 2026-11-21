@@ -59,13 +59,14 @@ All paths below are relative to the repo root.
 5. [General binary inspection](#5-general-binary-inspection)
    - [`analyze.py`](#51-analyzepy) · [`strings.py`](#52-stringspy) · [`region.py`](#53-regionpy) · [`hexdump.py`](#54-hexdumppy) · [`headers.py`](#55-headerspy) · [`pedump.py`](#56-pedumppy)
 6. [Bluetooth test rig (Linux)](#6-bluetooth-test-rig-linux)
-   - [`bt_be_headset.sh`](#61-bt_be_headsetsh-) ⭐ · [`bt_spp_hold.py`](#62-bt_spp_holdpy-) ⭐⭐ · [`bt_spp_ptt.py`](#63-bt_spp_pttpy) · [`bt_ag_capture.py`](#64-bt_ag_capturepy) · [`bt_hf_sim.py`](#65-bt_hf_simpy) · [`bt_audio_check.sh`](#66-bt_audio_checksh) · [`bt_wait_and_pair.sh`](#67-bt_wait_and_pairsh) · [`bt_multipoint_probe.py`](#68-bt_multipoint_probepy) · [`bt_ptt_emulator.py`](#69-bt_ptt_emulatorpy-) ⭐
+   - [`bt_be_headset.sh`](#61-bt_be_headsetsh-) ⭐ · [`bt_spp_hold.py`](#62-bt_spp_holdpy-) ⭐⭐ · [`bt_spp_ptt.py`](#63-bt_spp_pttpy) · [`bt_ag_capture.py`](#64-bt_ag_capturepy) · [`bt_hf_sim.py`](#65-bt_hf_simpy) · [`bt_audio_check.sh`](#66-bt_audio_checksh) · [`bt_wait_and_pair.sh`](#67-bt_wait_and_pairsh) · [`bt_multipoint_probe.py`](#68-bt_multipoint_probepy) · [`bt_ptt_emulator.py`](#69-bt_ptt_emulatorpy-) ⭐ · [`bt_ptt_channel_probe.py`](#610-bt_ptt_channel_probepy-)
 7. [Verification & regression suites](#7-verification--regression-suites)
    - [`verify_cli.py`](#71-verify_clipy) · [`verify_actions.py`](#72-verify_actionspy)
 8. [Typical workflows](#8-typical-workflows)
 9. [Ghidra pi32v2 decompile ⇒ compile route](#9-ghidra-pi32v2-decompile--compile-route)
    - [`ghidra/MoveBlock.java`](#91-ghidramoveblockjava) · [`ghidra/SeedFunctions.java`](#92-ghidraseedfunctionsjava) · [`ghidra/DumpDecompiled.java`](#93-ghidradumpdecompiledjava) · [`ghidra/rt_is1t2.c` + `ghidra/splice_rt.py`](#94-round-trip-example) · [`disassemble_app.py` + `ghidra/DumpAll.java`](#95-full-app-disassembly--decompilation-tree)
 10. [USB bootloader client — `jl_hidboot.py`](#10-usb-bootloader-client--jl_hidbootpy-) ⭐ (Linux, root)
+10b. [USB_KEY dongle firmware — `jl_usbkey_dongle.py`](#usbkey-dongle-firmware--jl_usbkey_donglepy) (RP2040 MicroPython, UNTESTED)
 11. [`jl_rt_asm.py`](#11-jl_rt_asmpy--provable-asm-round-trip-image--asm-text) — provable asm round-trip pipeline
 
 ---
@@ -425,6 +426,103 @@ stage `work/ch37c_bindc.sh` + card `work/ch37c_bindcc.sh`; v3 FIELD-FAILED SS37.
 stage `work/ch37d_bindc.sh` + card `work/ch37d_bindcc.sh`) FIELD-RAN SS37.14: connectivity
 FIXED (all connect paths, zero freezes) but 9th goal-miss (no live SCO on the redial) +
 SPP dies post-engage; DECISION POINT SS37.15 (user chose v4). **v4 BUILT SS37.16** (root causes statically proven: wrapper `0x4A` preamble = SPP killer; `is_1t2` dispatcher bail dropped cmd 1 — v3b never re-dialed): image `work/ch37e_bindc.bin` sha `b91b3535…` (274 B, sectors `0x01C000`+`0x065000`+`0x066000`+`0x0AC000`, uboot equal), oracle 0 unknowns, jl_sim 12/12 PASS, suites green; stage `work/ch37e_bindc.sh` + card `work/ch37e_bindcc.sh` — **v4 FIELD-FAILED SS37.17: goal-miss #10 + first crash of the series + SPP keying dead all card => IN-IMAGE BIND ROUTE CLOSED (no v5); next = free reverse-order test on S1 SS37.18.**
+
+### `--jabra-keep` (ch. 39 B3.4 jabra-first two-device keep, UNTESTED)
+
+**What:** the FIRST radio-hardware experiment with a NEW firmware using the
+**unmodified** TID-PTT button. Keeps the native Jabra-first audio bind untouched
+and adds one thing: after the Jabra connects, the radio *dials the button
+itself* (radio-originated second link — the E6-proven direction), then
+**restores the app current-device handle** so audio stays on the Jabra while the
+button's SPP ch 2 session keys the radio (SPP RX `FUN_01e5b2f4` has no
+current-device gate; the single-SPP cell `0x1A740` is free because the Jabra is
+HFP ch 6). This is NOT a bind attempt — every dead lever in ch. 39 §39.3 tried
+to *force* a bind; this one *preserves* the native bind and only repairs a
+handle around our own dial.
+
+**Sites (current = JK-5, §39.23; hook unchanged since JK-3, §39.19):**
+classifier-store hook `0x01E7EC98` (`52 ee 54 1d` =
+`b[r5+0xD4] = r1` — the classifier `FUN_01e7ec28`'s authoritative routing-byte
+store, the SOLE place mode is decided and written → `call 0x01EA7722` =
+`81 ea 43 45`) + 252 B cave `0x01EA7722..0x01EA781E` (14 B preamble
+`7904 0516 1016 80ea0200 5016 5904` — push `{rets,r9-r4}` pairing with the
+classifier epilogue, stash + mode-arg pass + return — + 238 B **compiled-C**
+body @`0x01EA7730`, source `work/ch39/jk5_c.c`, clang
+`--target=pi32v2-unknown-unknown -mcpu=r3 -Oz -mllvm -pi32v2-large-program`,
+link-at-VA, zero relocations). The tbh site `0x01E61270` is stock again (the
+JK-1/JK-2 hook there saw stale bytes on BT-task events 6/7 — lesson §39.16 +
+§39.18). State machine (RAM statics: state u32 `0x1C010` magic `0x4A4B…` —
+power-on garbage-tolerant, saved handle u16 `0x1C014`, BTN addr scratch
+`0x1C018`/`0x1C01C`, saved Jabra BD_ADDR `0x1C020`/`0x1C024`
+(JK-5)): body writes `*b = mode` FIRST (replicates the stock
+store for every mode, incl. transient ones — passthrough-identical when not
+engaging); `mode==3 && state==0 && exactly-one-conn-record-inuse` (slots
+`0x1A5B8`/`0x1A5D4`, inused bit `0x20` of byte `+0x12`, ch. 27 §27.1) → save
+`_DAT_00010372` + capture the sole record's BD_ADDR → RAM `0x1C020..25`
+(JK-5), state := `ST_DIAL`, post `USP(1,6,&BTN 6F:E5:E7:FB:12:4F)`
+**DIRECT** @`0x01E1792E` (NEVER the dial wrapper `0x01E600B4` — its `0x4A`
+preamble kills the incumbent SPP, §37.16); `mode==1 && ST_DIAL` → SPP-open
+`FUN_01e1782C(0x1C018,0,0x1101)` (the §39.20 keying fix) → restore
+`_DAT_00010372` + rewrite the app record addr `0x102F1..6` from
+`0x1C020..25` (the 0x3e sink `FUN_01e5af40` rewrote the WHOLE record —
+§39.22 consistency fix) → `ST_DONE`
+**TERMINAL** — one dial per boot, no `0xF0` re-arm, a re-dial loop is
+structurally impossible. **Known gap:** no teardown repair (echo after Jabra
+power-off is stock-unpatched; card S7 observes). Button-first = stock
+passthrough. **No NOPs anywhere** — `is_1t2_connection` is FALSE with
+conn-num=2 + one active link so cmd 1 proceeds (§39.14 decode of
+`0x01E179E0..A2A`).
+
+**Exclusivity:** shares the `0x01EA7722` cave run — mutually exclusive with
+`--incoming-mode3`/`--incoming-hfp`/`--incoming-redial`/`--redial-*`,
+`--bind-c`, `--led-probe`, `--cmd5-target`/`--cmd5-handle`, `--gate-close`,
+`--r1-*`, `--d1-target-wait` (JK-3 itself leaves the tbh site `0x01E61270`
+stock; those options patch it). Intended base = S1 (`--bt 4 --PTT=BT-PTT
+--PTT2=BT-PTT2 --OD-PTT=PTT` + E7 kick-NOPs + `--conn-num=2`).
+
+**Status:** BUILT 2026-11-19 ([findings/39](../findings/39-two-device-master-plan.md)
+§39.15). **JK-1 (218 B cave, no early gate) FLASHED + FIELD-FAILED 2026-11-19
+§39.16: the unconditional joiner deref froze the BT task on tbh events 6/7 —
+NO device could connect or pair, hard freeze on Paired→Connect; image
+`work/ch39_jk.bin` `220c500b…` must not ship.** **JK-2 = the gate-order fix
+§39.17:** body 216 B / cave 226 B; llvm-objdump clean (zero relocs, gate
+before derefs), upstream pi32v2-isa oracle decode clean, jl_sim **8/8 PASS**
+(T1 save+dial post / T2 restore+`ST_DONE` / T3a re-arm / T3b teardown-restore
+/ T4 passthrough / T5a-c garbage-pointer passthrough), `verify_actions.py` +
+`verify_cli.py` 0 failures. Image `work/ch39_jk2.bin` sha `ab68cf26…` = S1 +
+sectors `0x066000`+`0x0AC000` only (208 B), uboot asserted equal; stage
+`work/ch39_jk2.sh` + card `work/ch39_jk2c.sh` (R1 connect-regression gate
+FIRST) ready. **JK-2 FLASHED + FIELD-RAN 2026-11-19 (findings/39 §39.18):
+PARTIAL — §39.16 freeze FIXED (Jabra pairs + auto-joins); button unpairable +
+invisible in Pairable + freeze on most Paired→Connect presses — preferred
+hypothesis: the auto-dial FIRES and the button connects SILENTLY (see §39.18).**
+**JK-3 BUILT 2026-11-20 §39.19 (supersedes the D-card wait — works under BOTH
+§39.18 hypotheses):** hook moved to the classifier routing-byte store
+`0x01E7EC98`, one-shot terminal state machine, 136 B body / 150 B cave;
+upstream oracle 0 `???`, jl_sim **11/11 PASS** (T1 arm+dial with full BTN addr
+/ T1b-c conn-record guards / T2 restore / T3–T6 one-shot passthroughs / T7
+slot-1 / T8–T9 store-only modes), both suites 0 failures after the `jkcave`
+ctx-state mirror fix (rule: sites sharing the `0x01EA7722` run must mirror
+sibling states or `find_app_start` breaks). Image `work/ch39_jk3.bin` sha
+`66415d78…` = S1 + sectors `0x083000`+`0x0AC000` only (141 B), uboot equal;
+stage `work/ch39_jk3.sh` + card `work/ch39_jk3c.sh` (visible echoed
+questions) ready. **JK-3 FLASHED + FIELD 2026-11-20 §39.20 PARTIAL — the
+auto-dial FIRED (first ever) but keying stayed dead: the raw cmd-1 dial brings
+the ACL only; the app opens SPP separately. JK-4 BUILT §39.21 + FLASHED +
+FIELD 2026-11-21 §39.22 PARTIAL/BREAKTHROUGH #2 — the SPP-open fix made keying
+WORK with good audio (first ever); NEW wall: the Jabra drops after the 1st TX
+(0x3e sink `FUN_01e5af40` rewrites the whole app record `0x102F0`; handle-only
+restore left a BTN-addr/Jabra-handle mismatch). JK-5 BUILT §39.23 —
+record-consistency restore (BD_ADDR capture `0x1C020..25` at arm + record-addr
+rewrite `0x102F1..6` at restore); body 238 B / cave 252 B, oracle 0 `???`,
+jl_sim 14/14, both suites 0 failures after the patcher LEGACY-WINDOW RESOLVER
+fix (`_jk_reg`/`_jk_resolve` + acceptance in `show`/`apply_patch`/
+`find_app_start`/`check_context` — the 150→232→252 B window growth had
+orphaned legacy cave payloads at offsets 54/134/174/206/212 → 25 failures →
+0). Image `work/ch39_jk5.bin` sha `614e4e01…` = S1 + sectors
+`0x083000`+`0xAC000` only (237 B), uboot equal; stage `work/ch39_jk5.sh` +
+card `work/ch39_jk5c.sh` (decisive S4b = Jabra survives 3 consecutive TX).
+**Radio on JK-4 `5f3e3de9…`; JK-5 UNTESTED — verdict → findings/39 §39.24.**
 
 ## 2. Firmware patching
 
@@ -1164,6 +1262,24 @@ sudo python3 tools/bt_ptt_emulator.py [--name TID-PTT000000-E] [--cycle 1 4] [--
 
 Then dial it from the radio (menu Connect / auto-reconnect), exactly like the real button.
 
+### 6.10 `bt_ptt_channel_probe.py`
+
+**What:** enumerates a peer's **full RFCOMM channel map** — unlike
+`bt_ag_capture.py` (which stops at the first opener), it **keeps every opening channel
+connected**, holds them for `--hold` seconds while you press the button, then reports
+per channel: open? bytes seen? `+SPP` events decoded? Closes all sockets at once at the
+end so the button's drop-ACL-on-SPP-close quirk (§38.1) can't fire mid-test.
+
+**Why:** P0.2 Run A found the button opens ch **10** in pairing-blink and ch **2**
+bonded/idle (ch. 39 §39.4) — "open" ≠ "talks", and the rest of the map is unknown.
+Run once bonded/idle and once right after a blink to compare the two states.
+
+**Usage:**
+
+```
+sudo python3 tools/bt_ptt_channel_probe.py <mac> [--channels 1-30] [--only 2,10] [--hold 10]
+```
+
 ---
 
 ## 7. Verification & regression suites
@@ -1407,6 +1523,30 @@ sudo python3 tools/jl_hidboot.py reboot
 * 2026-11-07 — handshake + CRC mapping verified vs `work/ch32_p1.bin` (4/4 blocks
   byte-exact); `restore work/ch30_e7ref.bin` **PASSED**: 196/196 sector CRCs
   verified, radio rebooted to the E7 daily driver from the P1 SDK image.
+
+### USB_KEY dongle firmware — `jl_usbkey_dongle.py`
+
+**RP2040 MicroPython firmware** (not a host tool — the one deliberate exception to
+the stdlib rule; it runs ON the dongle MCU). Implements the JieLi MaskROM USB_KEY
+download-mode entry for devices with no firmware-side boot combo — built for the
+TID-PTT puck (findings/39 §39.13, Route A step 2.1, UNTESTED). Protocol
+(kagaimiq/jielie `isp/usb/usb-key.md`): send `0x16EF` MSB-first, **D+ = clock,
+D- = data**, ~50 kHz, repeatedly until the chip ACKs by holding BOTH lines low
+1–2 ms; then pulse D+ low 10 µs every 1 ms (SF-alike so the chip's PLL
+calibration sees a clean 1 ms cadence) until the chip pulls D+ low ≥2 ms, and
+only THEN connect the PC side of the bus (2× SPST analog switch gated by GP2 —
+manual hot-plug is too slow for the chip's watchdog window). Wiring: GP0=CLK and
+GP1=DATA, open-drain, external 4.7 kΩ pull-ups to 3V3 on the target-side node
+(internal 20 kΩ pull-ups give false-ACK dividers against the chip's 15 kΩ
+pulldowns); GP25=LED (blink=streaming, solid=PC connected). Copy to the board as
+`main.py`. First-contact procedure = card P2.1 (ch39 §39.13): stream key → power
+puck → record enumeration VID:PID (puck MaskROM face UNKNOWN, not necessarily
+`4c4a:4155`) → `jl_hidboot.py info` / jl-uboot-tool read-only. **SWITCHLESS mode
+added 2026-11-21** (`SWITCHLESS = True`): the field-proven simpler topology
+(findings/38 §38.26-1) — PC permanently parallel on D+/D−, no analog switch, GP2
+unused; after ACK the dongle releases the lines and the host's real 1 ms SOF packets
+calibrate the chip (PC MUST be attached before target power-on). Also fixed: missing
+`sleep_us` import (NameError on first packet).
 
 ## 11. `jl_rt_asm.py` — provable asm round-trip (image ⇄ asm text)
 

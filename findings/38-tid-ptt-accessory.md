@@ -389,3 +389,135 @@ peer-identity snapshot (2026-09, ch. 09) lists "Manufacturer: Zhuhai Jieli
 Technology (1494), LMP 5.3, subversion `0x22bb`". §38.8 (2026-11-16) re-derived the
 same facts via `hcitool info` without crediting ch. 09. The verdict stands; the
 priority is corrected here.
+
+## §38.24 Formal retraction of §38.7's "events only flow on PTT-originated links" (2026-11-18)
+
+§38.7 item 4 concluded the PTT's ch-2 server was NOT the event path and that events
+only flow on PTT-originated links. That conclusion is DEAD: ch. 39 §39.4.1/§39.4.2
+(Runs A/B, 2026-11-18) captured `+SPP=P/R` on ch 2 from **PC-originated** raw RFCOMM
+sessions — bonded AND unbonded, no AG handshake. §38.7's section 5 piped
+`rfcomm connect` through `head` under `timeout` and never opened a reader on the
+socket: the events arrived and were discarded (capture artifact, §39.4.2-2).
+Architecture as proven: the PTT hosts an SPP server on ch 2; ANY host holding a live
+ch-2 session receives the events. (This section is the §38.24 referenced by the
+ch. 39 header and copilot-instructions.)
+
+## §38.25 OTA verdict — can ch 2/4/10 read, write or bootloader-entry the PTT firmware? (2026-11-21, analysis of the existing record; answers the user's direct question)
+
+With the proven session (`sudo python3 tools/bt_ag_capture.py --connect
+6F:E5:E7:FB:12:4F`, ch 2/4/10 open — map §39.4.1): can those channels OTA-update,
+READ or WRITE the PTT firmware, or force UBoot mode (USB or Bluetooth)? Per-door:
+
+| Door | Read fw | Write fw | UBoot entry | Evidence |
+|---|---|---|---|---|
+| ch 2 (PTT SPP server) | NO | NO — dead to RCSP | NO | zero reply to E1/E2 in 4 framings (§38.10); carries app events only (§38.24) |
+| ch 4 (PTT's own HF-role SLC — PTT is the CLIENT, we are AG) | NO | NO | NO | HFP has no firmware semantics; PTT-originated `AT+BRSF=671` (§39.4.1). Vendor AT tells `AT+JLRHI=?`/`AT+JLDP=?` on a COMPLETED SLC = UNTESTED long shot |
+| ch 10 | NO | NO | NO | factory loopback echo, executes nothing (§39.4.5) |
+| BLE `ae01`/`ae02` (RCSP transport; GATT byte-identical to SDK `RCSP_BTMATE_EN`, §38.9) | NO — RCSP has no raw-flash readback opcode | MAYBE — unconfirmed | NO (§38.21: E3 selects BLE/SPP **app** update, never `USB_UPDATA`) | NEVER tested on the wire — rounds 5c–5j all lost to bluetoothd link teardown (§38.15-B, §38.20). Only live BT door |
+
+1. **READ is architecturally absent from Bluetooth.** The JieLi OTA stack — RCSP
+   `rcsp_updata` E1–E8 (§38.9) and the `JL_OTA`/`AC63` BLE service — is WRITE-only:
+   E5 pushes blocks INTO the device; no opcode dumps flash. (RCSP file-transfer
+   categories read app files/logs at most, only if the OEM implements them — nothing
+   suggests the PTT does.) A dump requires the ROM/MaskROM downloader.
+2. **The ROM downloader never listens on Bluetooth** — only USB (HID / `USB_KEY`) or
+   UART. RCSP E3 reboots into an APP-level update mode, not uboot (§38.21); E2 can
+   even start a loader download on single-bank builds — E1/E2 are NOT categorically
+   harmless (§38.21).
+3. **The dump route that exists = the USB_KEY handshake** (§39.6 step 2.1, design
+   §39.13): bit-bang key `0x16EF` (D+ = clock, D− = data, ~50 kHz) at power-on →
+   MaskROM enters USB download mode → full-chip READBACK with `tools/jl_hidboot.py`
+   (read-only `info` + dump first; back up TWICE + hashes, §39.6 2.2). Dongle
+   firmware BUILT (`tools/jl_usbkey_dongle.py`, MicroPython/RP2040), hardware build
+   pending = card P2.1. The §38.6 "USB-boot probe NEGATIVE" tested enumeration
+   WITHOUT the key handshake — it is NOT a negative for this route. Read-protect
+   status unknown until first contact; if ON → SDK-rebuild route (§38.8-3).
+4. **Do NOT OTA-write before the dump + write-back proof.** A failed flash on a
+   device whose boot mode we cannot yet enter has no known recovery (asymmetry with
+   the radio, which always has PTT+1+power-on HID uboot). §38.3 propose-don't-flash.
+5. Remaining cheap BT-side experiments (neither yields a dump): (a) the BLE RCSP test
+   finally executed with bluetoothd genuinely out of the way (raw ATT client — root
+   cause of all 8 lost rounds, §38.15-B) → proves/disproves the WRITE door and yields
+   VID/PID/version from E1/E2 replies; (b) ch-4 SLC completion + JieLi vendor AT
+   probes. An official TIDRADIO-app update capture (§38.22) would prove a vendor
+   write path and reveal its handshake.
+
+## §38.26 External field report — tmon.ch "fake AirPods Max" hack (JL7018F8/BR28): the USB_KEY route independently PROVEN, with deltas to our P2.1 (2026-11-21)
+
+Source: <https://tmon.ch/blog/airpods-max-clone/> (Timon Durot, 2026-08-31). The author
+executed **exactly our planned Route A** (§39.6 step 2.1 / §39.13) on a *different*
+JieLi chip — picun F8 Pro clone headphones, QFN40 **JL7018F8** — with an ESP32-S3
+bit-banging the USB_KEY into ROM UBOOT, full flash dump, decrypt, repack, rewrite;
+bricked once, recovered from ROM. Family naming chaos (his lesson one): datasheet
+**JL7018F8 = SDK JL701N = community AC701N = bootloader BR28** — search the FAMILY,
+not the exact marking (applies to the PTT once we read its marking or its dmesg
+UBOOT string).
+
+**Independent confirmations of our design** (first-hand, so §39.13 stands):
+key `0x16EF` MSB-first, D+ = clock (rising-edge latch), D− = data, stream repeatedly
+until ACK = both lines low; the false-ACK trap is real (chip 15 kΩ pulldowns beat
+MCU-internal weak pull-ups → lines read low with NO ack → strong external ~4.7 kΩ
+pull-ups mandatory — precisely our §39.13 rationale); post-ACK the chip times 1 ms
+SOF edges and other bus traffic corrupts the calibration (→ dedicated controller/hub,
+our card P2.1 step 6); a battery keeps the target alive so a "reset" that is not a
+reset silently does nothing (→ stream the key ACROSS power-on, `while(!send_usbkey())`
+— our `KEY_STREAM` state does exactly this); the flash cipher is **identical to our
+SFCENC** (16-bit LFSR poly `0x1021`, keystream restarted every 32 bytes with
+`chipkey ^ (offset >> 2)`, XOR-symmetric — his snippet is our `tools/jl_sfcenc.py`;
+cross-validates the cipher on a second family, BR28 vs our BR23).
+
+**Deltas NOT previously in our record** (adopted — see §39.13 addendum + the
+`SWITCHLESS` mode added to `tools/jl_usbkey_dongle.py`):
+
+1. **Switchless topology, field-proven.** PC and MCU sit PERMANENTLY in parallel on
+   D+/D− (wiring diagram: christian-kramer/JieLi-AC690X-Familiarization issue #12);
+   no analog pass-through switch, no SOF injection — after the ACK the MCU just
+   releases the lines and the host's REAL 1 ms SOF packets calibrate the chip.
+   Ordering is mandatory: **PC already attached before the target resets** ("no host
+   means no calibration, and newer chips apparently only try a few times"). Simpler
+   BOM than our switched design; our SOF-injection + switch variant stays as the
+   isolated-bus fallback.
+2. **UBOOT USB face (BR28 generation):** enumerates as a **fake mass-storage
+   device**, tools talk via custom SCSI commands; `jl-uboot-tool` uploads a RAM
+   loader → shell with full flash read/write. `dmesg` prints
+   `<FAMILY>UBOOT<ver>` (his: `BR28UBOOT1.00`) = **free chip-family identification
+   at first contact**. Expect EITHER this mass-storage face OR HID (the radio's
+   fw-Bootloader face, §32.10.1) on the PTT.
+3. **The UBOOT shell reports the chip key and flash ID directly** (his: key
+   `0x077A`; flash ID `0xb36014` → trailing `0x14` = 2^20 = 1 MB; dumping beyond
+   capacity just repeats — address wrap). The PTT's chip key is readable at first
+   contact → decrypt with our existing tools; check the ID byte before trusting a
+   dump size.
+4. **Recovery calculus UPDATED (refines §38.25-4):** UBOOT lives in ROM — after ONE
+   successful entry + pristine dump, flash writes become recoverable (write the dump
+   back). The chip ALSO drops into download mode by itself if flash boot fails
+   entirely. The §38.25 "no known recovery" warning holds only until first entry +
+   dump.
+5. **PB1 reset door:** the SDK default config resets the chip when **PB1 is held low
+   8 s** — a clean repeatable ROM-window trigger IF PB1 is broken out on the PTT
+   board (his alternatives: unplugging the battery, or the hazardous VDD-GND short —
+   not recommended). Check the PTT test pads for PB1.
+6. **Reference-schematic test points:** JieLi reference designs reserve
+   **VBAT/DP/DM/GND** pads for flashing — look for labeled DP/DM pads next to the
+   SoC (solder directly instead of teardown-to-connector); NEVER feed the tool's 5 V
+   into VBAT; keep VBAT < 4.5 V while flashing.
+7. **Unpack = kagaimiq/jl-misctools:** decrypted dump → real filesystem
+   (`uboot.boot`, `app.bin`, `config.dat`, `eq_*.bin`, `tone/*.mp3`). **`config.dat`
+   is string-driven config parsed at runtime** (his: `pilot_lamp_io=PB03`) — a
+   patch-without-code door. Whether the PTT's paging/connect policy lives in such a
+   config area is SPECULATIVE but cheap to check on the dump (would serve the §37.19
+   goal with zero code RE).
+8. **Packing discipline** (his brick + recovered build table): a packer must prove a
+   bit-for-bit no-op rebuild + clean independent-unpacker round-trip; the **VM area
+   can start MID-SECTOR** (his sector 205 shared = hard wall for image growth);
+   unknown data past the resource-chain end — do not overwrite; one variable per
+   build. Consistent with our uboot-assert + readback rules; adopt all four for any
+   PTT image work.
+9. Multi-button **ADC line** trick (his diagnostic): boards may read several buttons
+   on ONE ADC pin — direct short-to-GND decodes POWER, through 1 kΩ (~0.27 V) decodes
+   ANC. Driving such a line could force button events (e.g. pairing) on a teardown
+   board. SPECULATIVE for the PTT.
+10. **Official vendor path = JieLi config tool drag-and-drop** (tone swap) —
+    strengthens the §38.22 capture lead: an official-app update session reveals the
+    vendor write handshake; and tone files are plain MP3 (24 kHz mono 24 kbps
+    MPEG-2 L3, strip XING/ID3 to save bytes, `FF` padding tolerated).

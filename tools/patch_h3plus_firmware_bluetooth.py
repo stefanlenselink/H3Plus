@@ -913,6 +913,88 @@ for _bc_v in (0x01E17420, 0x01E07B08, 0x01E1792E, 0x01E249CE,
 BINDC_HOOK = encode_call(BINDC_HOOK_VA, BINDC_CAVE_VA)
 assert decode_call(BINDC_HOOK_VA, BINDC_HOOK) == BINDC_CAVE_VA
 
+# ---- ch. 39 B3.4 --jabra-keep (findings/39 SS39.22/SS39.23, 2026-11-21, UNTESTED) ----
+# Jabra-first two-device keep, JK-5 = CLASSIFIER-STORE hook + SPP open +
+# record-consistency restore. Rationale (SS39.18): the JK-2 tbh hook at
+# 0x01E61270 never armed in the field (the routing byte read at BT-task loop
+# events 6/7 is stale for this purpose - no button dial observed, and the
+# 0xF0 re-arm branch is loop-capable).
+# The hook targets the ONLY authoritative write point of the routing byte: the
+# classifier store @0x01E7EC98 (FUN_01e7ec28 epilogue path,
+# `52 ee 54 1d` = b[r5+0xD4] = r1, r5 = 0xB390 -> b[0xB464]) is replaced by
+# a call into the cave. The cave replicates the store for EVERY mode first
+# (exact stock behavior, incl. the transient 6 - the transient 5-store at
+# 0x01E7EC50 is NOT hooked), then:
+#   mode==3 (HFP/headset connect classification) && state==0 && exactly one
+#   conn record inuse (bit 0x20 of byte 0x1A5CA XOR 0x1A5E6) && the sole
+#   record's BD_ADDR != BTN (reverse guard, SS39.20 - button-first is stock
+#   passthrough, never re-dial a connected device):
+#     save _DAT_00010372 -> RAM 0x1C014, CAPTURE the sole record's Jabra
+#     BD_ADDR rec+0..5 -> RAM 0x1C020 (u32) + 0x1C024 (u16) (JK-5),
+#     state := 0x4A4B0001 (ST_DIAL),
+#     stage BTN 6F:E5:E7:FB:12:4F @0x1C018/0x1C01C, post USP(1,6,BTN)
+#     DIRECT to dispatcher 0x01E1792E (NEVER the dial wrapper 0x01E600B4 -
+#     its 0x4A preamble kills the incumbent SPP, SS37.16). With conn-num=2
+#     and one active link the is_1t2 bail is FALSE -> the dial proceeds
+#     (SS39.14; NO NOPs anywhere).
+#   mode==1 (SPP/button classification) && state==ST_DIAL:
+#     open the SPP session FUN_01e1782C(0x1C018, 0, 0x1101) (stock event-3
+#     replay - the raw cmd-1 dial brings ACL only, no rfcomm ch-2 session,
+#     no +SPP frames, no keying; SS39.20 fix, field-CONFIRMED SS39.22),
+#     THEN restore the saved Jabra handle into _DAT_00010372, THEN rewrite
+#     the record address *(u32*)0x102F1 = [0x1C020], *(u16*)0x102F5 =
+#     [0x1C024] (JK-5: the 0x3e sink FUN_01e5af40 rewrote the WHOLE record
+#     to the button on connect-complete - handle-only restore left
+#     BTN-addr + Jabra-handle INCONSISTENT and the stock single-audio
+#     policy tore the Jabra after the first TX, SS39.22),
+#     state := 0x4A4B0002 (ST_DONE, TERMINAL - one-shot per boot).
+# The classifier runs once per radio-originated connect and the state is
+# terminal -> a re-dial loop is structurally impossible (no tbh hook, no
+# 0xF0 handling). KNOWN GAP: no teardown repair if the button drops after
+# ST_DONE (echo-latch risk, SS30.14.25) - recorded on the field card.
+# Body = compiled C (work/ch39/jk5_c.c; clang --target=pi32v2-unknown-unknown
+# -mcpu=r3 -Oz -mllvm -pi32v2-large-program; linked at 0x01EA7730, symbol
+# jkc, zero relocations; llvm-objdump -d jk5_c.elf order-verified; upstream
+# pi32v2-isa oracle decode of the full cave stream clean; jl_sim 14/14 PASS
+# 2026-11-21: T1/T7 arm+dial+addr-capture (slot0/slot1 inuse), T1b/T1c
+# guards, T1d/T1e reverse guard, T2 full-run SPP-open+handle+addr restore,
+# T2b SPP args, T3/T4 passthrough, T5/T6 one-shot terminal, T8/T9 store-only).
+# Cave preamble 14 B @0x01EA7722: push {rets,r9-r4} (79 04 INCLUDES rets -
+# pairs with the classifier epilogue 59 04 = {pc,r9-r4}=[sp++]), r5 = r0
+# (classifier's live base), r0 = r1 (mode arg), call body, r0 = r5
+# (classifier expects r0 preserved across the store), return. RAM statics:
+# state u32 @0x1C010 (0x4A4B0001 dial / 0x4A4B0002 done), saved handle u16
+# @0x1C014, BTN addr scratch @0x1C018..1D, saved Jabra addr @0x1C020..25.
+# Cave 252 B
+# @0x01EA7722..0x01EA781E (free run ends 0x01EA7849).
+JK_HOOK_VA = 0x01E7EC98
+JK_CLS_STORE = bytes.fromhex("52ee541d")            # b[r5+212] = r1 (stock)
+JK_CAVE_VA = 0x01EA7722
+JK_BODY_VA = 0x01EA7730
+JK_PRE = bytes.fromhex("79040516101680ea020050165904")
+JK_BODY_BYTES = bytes.fromhex(
+    "7404c4ff10c001004160c2ff64b40000a84080f802061144540480f8fd03c0ff01004b4a"
+    "80e8f811c0ff18c00100c3ff2c78e101412042e00111c3004862c1ff7203010098604064"
+    "c1fff10201009060486a9862c0fff23f494a401cc0605404c0ffcaa50100094050ee0c21"
+    "291951e8d3290a40c1ffbca50100c0ffd8a5010032ea20001016c3ffb8a50100c1ffd4a5"
+    "010032ea200031161260c3ff6fe5e7fb83e805200a6043e0124f03e8b521c2ff72030100"
+    "2a60ca621160c1640860c86ac0fff13f494a401cc060c0ff5f25e6fb401cc06240e0124f"
+    "c866c2ff18c00100c3ff2e79e10140214126c3005404")
+JK_CAVE_BYTES = JK_PRE + JK_BODY_BYTES
+assert len(JK_PRE) == 14
+assert len(JK_BODY_BYTES) == 238
+assert len(JK_CAVE_BYTES) == 252
+assert decode_call(JK_CAVE_VA + 6, JK_CAVE_BYTES[6:10]) == JK_BODY_VA
+assert bytes.fromhex("124f") in JK_BODY_BYTES        # BTN addr tail 12:4F (u16 imm;
+                                                     # the u32 half is built as
+                                                     # imm+0x1C010 - jl_sim T1 proves
+                                                     # full 6F:E5:E7:FB:12:4F @0x1C018)
+assert bytes.fromhex("2e79e101") in JK_BODY_BYTES    # USP dispatcher VA
+assert bytes.fromhex("2c78e101") in JK_BODY_BYTES    # SPP session API FUN_01e1782C VA
+assert JK_CAVE_VA + len(JK_CAVE_BYTES) <= 0x01EA7849   # inside the cave run
+JK_HOOK = encode_call(JK_HOOK_VA, JK_CAVE_VA)
+assert decode_call(JK_HOOK_VA, JK_HOOK) == JK_CAVE_VA
+
 
 def _pf_body7_h2():
     """PF7 press body (10 bytes) for BT-PTT2: flag + push key 0x2A."""
@@ -2309,7 +2391,8 @@ def build_patches(duplex_mode=4, ptt2_action="PTT2", odptt_action="OD-PTT",
                   incoming_mode3=False, incoming_hfp=False,
                   incoming_redial=False, redial_bind=False,
                   redial_current=False, redial_bind2=False,
-                  redial_appswap=False, led_probe=False, bind_c=False):
+                  redial_appswap=False, led_probe=False, bind_c=False,
+                  jabra_keep=False):
     """Return the patch table, with the `duplex` patch's target selected by
     `duplex_mode` (see DUPLEX_LABELS) and the `pflabels` multi-patch built
     for the (--PTT2, --OD-PTT) action pair (see PF_COMBO_PATCHES). The
@@ -3095,6 +3178,43 @@ def build_patches(duplex_mode=4, ptt2_action="PTT2", odptt_action="OD-PTT",
         "ctx_variant": _ctx_variant_fn(BINDC_DIAL_HOOK_VA,
                                        BINDC_DIAL_HOOK_VA, BINDC_DIAL_STOCK),
     }
+    # ---- ch. 39 B3.4 --jabra-keep (findings/39 SS39.19, UNTESTED) --------
+    patches["jkhook"] = {
+        "desc": "classifier routing-byte store 0x01E7EC98 -> --jabra-keep cave"
+                if jabra_keep else "classifier routing-byte store (stock)",
+        "va": JK_HOOK_VA,
+        "new": JK_HOOK if jabra_keep else JK_CLS_STORE,
+        "states": {"stock": JK_CLS_STORE, "jabrakeep": JK_HOOK},
+        "labels": {"stock": "stock: b[r5+212] = r1 (classifier store)",
+                   "jabrakeep": "ch. 39 --jabra-keep classifier hook"},
+        "target": "jabrakeep" if jabra_keep else "stock",
+        "ctx_va": JK_HOOK_VA,
+        "ctx_base": JK_CLS_STORE,
+        "ctx_variant": _ctx_variant_fn(JK_HOOK_VA, JK_HOOK_VA,
+                                       JK_CLS_STORE),
+    }
+    patches["jkcave"] = {
+        "desc": "code cave 0x01EA7722 --jabra-keep dial-and-restore machine"
+                if jabra_keep else "code cave 0x01EA7722 (free)",
+        "va": JK_CAVE_VA,
+        "new": JK_CAVE_BYTES if jabra_keep else b"\x00" * len(JK_CAVE_BYTES),
+        "states": {"native": b"\x00" * len(JK_CAVE_BYTES),
+                   "jabrakeep": JK_CAVE_BYTES,
+                   "bindc": BINDC_CAVE_BYTES[:len(JK_CAVE_BYTES)],
+                   "gateclose": GATE_CAVE2_IMG + b"\x00" * (
+                       len(JK_CAVE_BYTES) - len(GATE_CAVE2_IMG))},
+        "labels": {"native": "erased (all zero)",
+                   "jabrakeep": "ch. 39 --jabra-keep cave (252 B)",
+                   "bindc": "ch. 37 --bind-c cave occupies this window "
+                            "(mutually exclusive)",
+                   "gateclose": "ch. 27 gate-close stubs occupy this window "
+                                "(mutually exclusive)"},
+        "target": "jabrakeep" if jabra_keep else "native",
+        "ctx_va": JK_CAVE_VA,
+        "ctx_base": b"\x00" * len(JK_CAVE_BYTES),
+        "ctx_variant": _ctx_variant_fn(JK_CAVE_VA, JK_CAVE_VA,
+                                       b"\x00" * len(JK_CAVE_BYTES)),
+    }
     # Recognition only (static): teach the families sharing the cave run
     # about the bindc blob (all mutually exclusive via CLI).
     patches["inchrdlcave"]["states"]["bindc"] = BINDC_CAVE_BYTES[:_ird_w]
@@ -3117,6 +3237,44 @@ def build_patches(duplex_mode=4, ptt2_action="PTT2", odptt_action="OD-PTT",
         BINDC_CAVE_BYTES[174:174 + len(PRESST_CAVE_BYTES)])
     patches["presstcave"]["labels"]["bindc"] = (
         "ch. 37 --bind-c cave occupies this window (mutually exclusive)")
+    # Recognition only (static): teach the same families the --jabra-keep
+    # cave bytes (all mutually exclusive via CLI).
+    _jk_win = JK_CAVE_BYTES + b"\x00" * 295
+    for _jk_site, _jk_slice in (
+            ("inchrdlcave", _jk_win[:_ird_w]),
+            ("inchrdlcurcave", _jk_win[_ird_w:_ird_w + _ic_w]),
+            ("r1cave", _jk_win[54:104]),
+            ("r1bcave", _jk_win[54:132]),
+            ("cmd5tcave", _jk_win[134:174]),
+            ("presstcave", _jk_win[174:174 + len(PRESST_CAVE_BYTES)])):
+        patches[_jk_site]["states"]["jabrakeep"] = _jk_slice
+        patches[_jk_site]["labels"]["jabrakeep"] = (
+            "ch. 39 --jabra-keep cave occupies this window "
+            "(mutually exclusive)")
+    patches["bindccave"]["states"]["jabrakeep"] = \
+        JK_CAVE_BYTES + b"\x00" * (_bc_w - len(JK_CAVE_BYTES))
+    patches["bindccave"]["labels"]["jabrakeep"] = (
+        "ch. 39 --jabra-keep cave occupies this window (mutually exclusive)")
+    patches["bindchook"]["states"]["jabrakeep"] = INCHRDL_HOOK_CTX
+    patches["bindchook"]["labels"]["jabrakeep"] = (
+        "stock: ch. 39 --jabra-keep JK-5 hooks the classifier store "
+        "0x01E7EC98 instead (this tbh site untouched)")
+    patches["inchrdl"]["states"]["jabrakeep"] = INCHRDL_HOOK_CTX
+    patches["inchrdl"]["labels"]["jabrakeep"] = (
+        "stock: ch. 39 --jabra-keep JK-5 hooks the classifier store "
+        "0x01E7EC98 instead (this tbh site untouched)")
+    # Recognition only (static): the --jabra-keep 252 B window is a prefix of
+    # the R5 cave run window (same VA 0x01EA7722). Recognise every payload the
+    # inchrdlcave site knows (R5 / R6a / R6b-R8 variants / LED-probe / legacy
+    # R1-e-F3 / bindc) sliced to 252 B, so images carrying those blobs still
+    # pass find_app_start() and --show stays clean (findings/39 SS39.19).
+    for _jk_mk, _jk_mv in list(patches["inchrdlcave"]["states"].items()):
+        if _jk_mk not in patches["jkcave"]["states"]:
+            patches["jkcave"]["states"][_jk_mk] = \
+                _jk_mv[:len(JK_CAVE_BYTES)]
+            patches["jkcave"]["labels"][_jk_mk] = (
+                "ch. 27/30/37 cave payload occupies this window "
+                "(mutually exclusive)")
     ck = "disabled" if no_cleanup_kick else "stock"
     patches["cleanupkickvar"] = {
         "desc": "app cleanup kick, variable-reason event (0x01E19AD0) -> %s" % ck,
@@ -3526,6 +3684,62 @@ def build_patches(duplex_mode=4, ptt2_action="PTT2", odptt_action="OD-PTT",
             if c2 != (ptt2_action, odptt_action)
         ],
     }
+    # Recognition only (static): the jkcave window (len(JK_CAVE_BYTES))
+    # overlaps the legacy caves of the 0x01EA7722 free run (R3/R4 @212,
+    # R1-e cmd5t @134, presst @174, r1/r1b @30, R6b-R8 CUR @174, bindc/gate
+    # @0).  Their 252 B window views are composites (zeros + payload slices;
+    # payloads may extend past the window end), so resolve them dynamically
+    # from the site defs instead of enumerating every combination
+    # (findings/39 SS39.23).  Mirrors/teach loops above stay: they feed
+    # find_app_start()/check_context() ctx_variants.
+    _jk_w = len(JK_CAVE_BYTES)
+    # Static registry of every legacy payload that has ever lived inside the
+    # 0x01EA7722 free run (findings/39 SS39.23): the option-gated legacy cave
+    # sites are ABSENT from `patches` under a plain --show, so recognition
+    # must not depend on which options happen to be on.  (offset, payload)
+    # pairs from the module constants; window = [JK_CAVE_VA, +_jk_w).
+    _jk_reg = [
+        (0, INCHRDL_CAVE_BYTES),                    # R5 --incoming-redial
+        (0, INCHRDL_CAVE_BYTES_BIND),               # R6a --redial-bind
+        (0, INCHRDL_CAVE_BYTES_CUR),                # R6b-R8 guard retarget
+        (0, LEDPROBE_FIRE_BYTES),                   # ch. 36 --led-probe
+        (174, INCHRDL_CUR_BYTES + b"\x00" * 16),    # R6b CUR window
+        (174, INCHRDL_BIND2_BYTES + b"\x00" * 16),  # R7/R8 CUR window
+        (54, R1_CAVE_BYTES),                        # ch. 30 R1-e cave
+        (54, R1B_CAVE_BYTES),                       # ch. 30 R1-e2/e3 cave
+        (134, CMD5T_CAVE_BYTES),                    # --cmd5-target cave
+        (174, PRESST_CAVE_BYTES),                   # --cmd5-target press cave
+        (206, D1_THUNK_CAVE_BYTES),                 # --d1-target-wait thunk
+        (212, INCMODE3_CAVE_BYTES),                 # R3 --incoming-mode3
+        (212, INCHFP_CAVE_BYTES),                   # R4 --incoming-hfp
+    ]
+    _jk_ov = [(q["va"] - JK_CAVE_VA, q) for n, q in patches.items()
+              if n != "jkcave" and q.get("kind") != "multi"
+              and JK_CAVE_VA <= q["va"] < JK_CAVE_VA + _jk_w]
+
+    def _jk_resolve(cur):
+        base = bytearray(_jk_w)
+        hits = 0
+        for _o, _sv in _jk_reg:
+            _vis = min(len(_sv), _jk_w - _o)
+            if _vis and cur[_o:_o + _vis] == _sv[:_vis]:
+                base[_o:_o + _vis] = _sv[:_vis]
+                hits += 1
+        for _o, _q in _jk_ov:      # option-on legacy sites (superset)
+            for _k, _sv in _q["states"].items():
+                if _k == "native":
+                    continue
+                _vis = min(len(_sv), _jk_w - _o)
+                if _vis and cur[_o:_o + _vis] == _sv[:_vis]:
+                    base[_o:_o + _vis] = _sv[:_vis]
+                    hits += 1
+                    break
+        return "legacy" if hits and bytes(base) == bytes(cur) else None
+
+    patches["jkcave"]["resolve"] = _jk_resolve
+    patches["jkcave"]["labels"]["legacy"] = (
+        "ch. 27/30/37 legacy cave payload occupies this window "
+        "(mutually exclusive)")
     return patches
 
 
@@ -3576,10 +3790,12 @@ def find_app_start(raw):
                 )
                 for c in cands
             )
-        return (
-            decrypt_rel(raw, start, va_to_off(p["ctx_va"]), len(p["ctx_base"]))
-            in ctx_variants(p)
-        )
+        win = decrypt_rel(raw, start, va_to_off(p["ctx_va"]),
+                          len(p["ctx_base"]))
+        if win in ctx_variants(p):
+            return True
+        # legacy-window resolver (jkcave): composite payloads accepted
+        return "resolve" in p and p["resolve"](win) is not None
 
     for start in CANDIDATE_STARTS:
         if len(raw) < start + APP_LEN:
@@ -3608,7 +3824,8 @@ def load_app(path):
 def check_context(app, p, name):
     off = va_to_off(p["ctx_va"])
     got = bytes(app[off : off + len(p["ctx_base"])])
-    if got not in ctx_variants(p):
+    if got not in ctx_variants(p) and not (
+            "resolve" in p and p["resolve"](got) is not None):
         raise SystemExit(
             "patch '%s': context mismatch at VA 0x%08X\n"
             "  found    %s\n"
@@ -3643,6 +3860,8 @@ def show(app):
             continue
         cur = bytes(app[off : off + len(p["new"])])
         label = next((k for k, v in p["states"].items() if v == cur), None)
+        if label is None and "resolve" in p:
+            label = p["resolve"](cur)
         if label is None:
             state = "UNKNOWN (%s)" % cur.hex(" ")
         elif cur == p["new"]:
@@ -3733,6 +3952,8 @@ def apply_patch(app, name):
         return False
 
     label = next((k for k, v in p["states"].items() if v == cur), None)
+    if label is None and "resolve" in p:
+        label = p["resolve"](cur)
     if label is None:
         raise SystemExit(
             "patch '%s': unexpected bytes at VA 0x%08X (found %s)\n"
@@ -4340,6 +4561,30 @@ def main():
     )
 
     ap.add_argument(
+        "--jabra-keep",
+        dest="jabra_keep",
+        action="store_true",
+        help="TWO-DEVICE JABRA-FIRST KEEP (ch. 39 SS39.19, UNTESTED): hooks "
+        "the classifier routing-byte store 0x01E7EC98 (the ONLY "
+        "authoritative write of b[0xB464]; JK-2's tbh hook 0x01E61270 never "
+        "armed in the field, SS39.18). The cave replicates the stock store "
+        "for every mode, then at mode 3 (headset connect classification) "
+        "with state 0 and exactly one conn record inuse it saves the app "
+        "current-device handle (_DAT_00010372) and dials the TID-PTT button "
+        "(6F:E5:E7:FB:12:4F, hardcoded) with USP(1,6,BTN) posted DIRECT to "
+        "dispatcher 0x01E1792E; at the button's mode-1 classification it "
+        "restores the saved Jabra handle so audio stays bound natively to "
+        "the headset while the button's SPP ch2 keys keep working (SPP RX "
+        "is ungated). One-shot terminal state (no 0xF0 re-arm -> a re-dial "
+        "loop is structurally impossible). Button-first = stock "
+        "passthrough. Requires the S1 base (--bt 4 + E7 kick-NOPs + "
+        "--conn-num=2). Compiled-C cave 252 B @0x01EA7722 (14 B "
+        "register-preserving preamble + 238 B body, work/ch39/jk5_c.c); "
+        "SPP session open + record-consistency restore (SS39.22); upstream "
+        "oracle clean, jl_sim 14/14 PASS 2026-11-21, hardware UNTESTED."
+    )
+
+    ap.add_argument(
         "--bind-c",
         dest="bind_c",
         action="store_true",
@@ -4601,6 +4846,19 @@ def main():
             "0x01EA7722..0x01EA7844 with the gate/R1/R3-R8/led-probe "
             "options; they cannot be combined."
         )
+    if args.jabra_keep and (args.bind_c or args.incoming_redial
+                            or args.incoming_mode3 or args.incoming_hfp
+                            or args.cmd5_target or args.gate_close
+                            or args.r1_conditional_kill
+                            or args.r1_walker_kill or args.d1_target_wait
+                            or args.led_probe or args.redial_bind
+                            or args.redial_current or args.redial_bind2
+                            or args.redial_appswap):
+        raise SystemExit(
+            "--jabra-keep shares the tbh hook 0x01E61270 and the cave run "
+            "0x01EA7722..0x01EA7844 with the gate/R1/R3-R8/bind-c/led-probe "
+            "options; they cannot be combined."
+        )
 
     PATCHES = build_patches(args.bluetooth_mode, a7, a8, args.conn_num,
                             args.no_kick, args.force_page_scan,
@@ -4616,7 +4874,7 @@ def main():
                             args.incoming_redial, args.redial_bind,
                             args.redial_current, args.redial_bind2,
                             args.redial_appswap, args.led_probe,
-                            args.bind_c)
+                            args.bind_c, args.jabra_keep)
 
     raw, app, app_start = load_app(args.src)
     print("source: %s (%d bytes)" % (args.src, len(raw)))
@@ -4741,6 +4999,8 @@ def main():
         wanted += ["ledprobefire"]
     if args.bind_c:
         wanted += ["bindchook", "bindccave", "bindcdial", "inchfpbail"]
+    if args.jabra_keep:
+        wanted += ["jkhook", "jkcave"]
     wanted = list(dict.fromkeys(wanted))
     if ({"pfbody7", "pfbody8", "pfrelease", "pflabels"} & set(wanted)
             and PF_LITERAL_PATCHES & set(wanted)):

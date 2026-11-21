@@ -82,9 +82,11 @@ no-op'd by `--no-spp-close` (E10); branch + `l2cap_disconnect` entry no-op'd by
 | controller command poster | `0x01E1664E` | `FUN_01e1664e(cmd, nargs, …)` → queue `0x1A688`; 12 call sites; only the kick posts cmd 5 |
 | controller queue relay | `0x01E22890` | registered consumer (ptr at `0x01E18F68`); queue obj `0x1A688`, mailbox `0x1A694`, `0xB8` entries, handle stored `0x1A6AC`; created @`0x01E18F4A`, registered via `0x02003BBC` |
 | relay cases | — | 1/3/4 = param writes (`0x01E07386`/`0x01E073F4`/`0x01E07440`); **5 = disconnect** (`0x01E22996`); 8 = profile state; 0xb = remote-name cache; 0x15 = LE adv config (`0xC54C`); 0x16 = accept/reject window `0x200C`; 0x82 = create-connection; 7/9/10/13/14/20/24/25/26 = no-ops |
+| relay cases — CORRECTED 2026-11-18 | `0x01E22890` | full decoder-ring table now in [ch. 39 §39.14](39-two-device-master-plan.md#3914-usp-command-relay-fully-decoded--the-dial-chain-2026-11-18-static-stock-v1050): USP **1** → `FUN_01e07386` → vendor `0x200A` (dial request); 0xb = conn-param fill then **dial executor `FUN_01e16f60`** → `FUN_01e07988` → HCI **`0x0405`** Create Connection (sole caller); 0xc/0x16 → `0x200C`; 0x10 → `0x200E`; 0x82 → `0x2013`; literal `0x2001` does NOT exist (ch39 §39.12 correction) |
 | generic send-to-controller | `0x01E029DE` | `(module_desc, n, code, args…)`; `0x400006` = LMP module; HCI Disconnect = code **`0x406`** (= 1030; IR `lmp_hci_disconnect` → `lmp_hci_cmd_to_conn_for_handle(handle, 2, 1030, reason)`) |
 | HCI command wrapper | `0x01E02C56` | below: `0x01E086F2` Accept Conn Req (`0x409`), `0x01E08726` Reject (`0x40A`, reason `0x0A`), `0x01E086FE` Accept Sync (`0x429`), `FUN_01e08672` `write_scan_enable` (`0x0C1A`) |
 | controller link table | IR `bredr_table[4]` | controller built for 4 ACLs; **behaves single-link for incoming pages** (ch. 27 §27.5/§27.7) |
+| **stack cmd executor** (2026-11-18) | `0x01E195BC` (`FUN_01e195bc`) | vendor cmds `0x2001–0x2012` + HCI-direct `0x0C03–0x0C37`; jump table `0x01E19756`; senders `0x01E07474`/`0x01E07498`/`0x01E07900`. **DIAL = `0x2001`→`0x0409` @`0x01E19AA4` (sole `0x0409` sender caller)**; Write_Scan_Enable `0x0C1A` reads RAM `0xBF3C` at execute time @`0x01E197D2`; page-timeout byte `0xBF38`, page-scan-activity `0xBF3E/0xBF40`. Full table: ch. 39 §39.12 |
 
 ## §29.4 — RAM data structures (stack globals, app device struct, config)
 

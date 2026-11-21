@@ -678,7 +678,9 @@ VM untouched, 32 device bytes intact.
 **Mechanism (established from `jl-uboot-tool/docs/how-to-enter-uboot.md` + SDK
 `apps/common/update/`):** on BR23 the download-mode entry points are
 1. **MaskROM USB_KEY** — a 16-bit key `0x16EF` bit-banged on the USB lines
-   (D- clock, D+ data) at every power-on; what the vendor updater *dongle* does.
+   (D+ clock, D- data — CORRECTED 2026-11-18 per kagaimiq/jielie
+   `isp/usb/usb-key.md`; previously swapped here) at every power-on; what the vendor
+   updater *dongle* does.
    Independent of flash content. `jl-uboot-tool` does **not** implement sending it.
 2. **NVRAM/VM boot-mode tag** — the *running firmware* sets an update flag
    (SDK: `update_mode_api_v2(USB_UPDATA, …)` / `VM_UPDATE_FLAG` via `syscfg_write`)
