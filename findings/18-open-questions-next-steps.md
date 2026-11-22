@@ -288,7 +288,7 @@ hardware check also passed (2026-10-01): `--PTT2=BT-PTT2 --OD-PTT=BT-PTT` displa
 
 - `work/app_dec.bin` (802,784 bytes) is now plaintext `pi32v2` code. Load at the correct base and find the string cross-references above.
 - Parse `app_area_head` at `0x5010` — likely a directory structure giving the real sub-region layout.
-- Separate code from the compressed audio resources (`storage/res_nor/C/tone/*`), which account for the residual 6.9 entropy.
+- Separate code from the compressed audio resources (`storage/res_nor/C/tone/*`), which account for the residual 6.9 entropy. *(Partially resolved 2026-11-21 — [Ch. 40 §40.7](40-radio-jlfs-filesystem.md): the 393-entry tone NAME table is in the app @`0x86A30`; the audio volume itself is NOT in the dump — see Unanswered questions.)*
 
 ### Priority 3 — Apply the decryption to the archived firmware
 

@@ -68,6 +68,7 @@ All paths below are relative to the repo root.
 10. [USB bootloader client — `jl_hidboot.py`](#10-usb-bootloader-client--jl_hidbootpy-) ⭐ (Linux, root)
 10b. [USB_KEY dongle firmware — `jl_usbkey_dongle.py`](#usbkey-dongle-firmware--jl_usbkey_donglepy) (RP2040 MicroPython, UNTESTED)
 11. [`jl_rt_asm.py`](#11-jl_rt_asmpy--provable-asm-round-trip-image--asm-text) — provable asm round-trip pipeline
+12. [`jl_jlfs.py`](#12-jl_jlfspy--jlfs-resource-chain-extractor) — JLFS resource-chain extractor + config.dat (JCRT) parser (ch. 40)
 
 ---
 
@@ -1576,3 +1577,27 @@ across the whole strict flash region (VM pairing bytes aside). Editable source
 lives at `work/rt/e7rt2.s`.
 Editing workflow: modify instruction text lines in `<tag>.s` (keep sizes or use
 labels), re-run `round`, then `bin` + `work/ch32_p2_pack.py` to package.
+
+---
+
+## 12. `jl_jlfs.py` — JLFS resource-chain extractor
+
+Pure-stdlib reader for the JLFS resource chain that trails `app.bin` in the
+decrypted app region (findings [ch. 40](../findings/40-radio-jlfs-filesystem.md)).
+Our image uses the 16-byte-entry variant: `[u32 data_crc][u32 data_off]
+[u32 block_size][u8 flags][u8 resvd][u16 index][name:16]`, blocks contiguous —
+not the 32-byte form in the community `fwunpack_newfw.py` (which fails on it).
+
+```bash
+python3 tools/jl_jlfs.py work/app_dec.bin                 # list chain + parse config.dat
+python3 tools/jl_jlfs.py work/app_dec.bin work/jlfs_out   # also extract files
+python3 tools/jl_jlfs.py work/app_dec.bin --tones         # tone-name resource table
+```
+
+Output on the H3+ v1.0.50 app: `cfg_tool.bin` (969 B: BT name `TD-H3 Plus`,
+PIN `1234`, BLE name `H3_Plus_BLE`, cfg_tool audio tables), `eq_cfg_hw.bin`
+(1149 B), `config.dat` (336 B, JCRT TLV: `ver_info`, `ver_info_ext`,
+`reset_io`, `pilot_lamp_io`, `link_key`, `power_io`), `md5.bin` (MD5 of
+`app_dec[0x100:0xC2C60]` — verified). No `tone/` files: the tone table names
+393 audio resources, but the audio volume is not in the dump (open question,
+ch. 40 §40.7).

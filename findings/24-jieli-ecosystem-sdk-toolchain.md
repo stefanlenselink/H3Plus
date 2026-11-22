@@ -161,6 +161,11 @@ matches `tools/isa/pi32v2.md` conventions exactly.
 Full details in the session report `postbuild-misctools-report.md`; headline results, all
 verified against **our own** v50 firmware:
 
+- **JLFS resource chain fully parsed + extracted 2026-11-21** by `tools/jl_jlfs.py` —
+  4 entries (`cfg_tool.bin`, `eq_cfg_hw.bin`, `config.dat`, `md5.bin`) @`0xC2C60`–`0xC3696`,
+  contents, `config.dat` JCRT key table, and the paging-policy verdict are in
+  [Ch. 40](40-radio-jlfs-filesystem.md).
+
 - **`.ufw` file table located — ch. 04 open question CLOSED.** `ufw_maker 1.1.14` output:
   0x40 header + N×0x50 entries, each LFSR-descrambled (key 0xFFFF), all CRC16-CCITT verified:
   `[etype, index, datacrc, off, size, size2, blob44, name16]`; etypes `flash.bin 0x00`,
