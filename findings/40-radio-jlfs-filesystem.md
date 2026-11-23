@@ -204,3 +204,132 @@ carries BT policy. The interesting new lead is **BTIF-as-file (`mnt/sdfile/app/b
 `0xFD000`)** and **EXIF-as-file** being read through the same cfg_tool record dispatcher —
 consistent with §40.3's finding that behavior config is minimal; the paging policy remains
 compiled code only.
+
+## §40.11 Full file map of the RUNNING-radio dump (2026-11-22)
+
+Source: `Dumps/dump_internal.bin` (1 MiB, md5 `8080a152df6221a538bf3970453953cb`) — taken
+from a running, loaded radio, so it contains live runtime state. Every FS from the §40.10
+mount table is enumerated below, recursively, with per-file contents + read/write sites.
+**Headline: the tail holds exactly ONE live runtime store — the VM record bank at
+`0xC9000` — and we cracked its record format (§40.11.3), including the radio's stored
+pairing records (BD_ADDR + link keys).**
+
+Non-FF content map of `0xC9000–0x100000` (64 B granularity): VM bank A `0xC9000–0xC948F`
+only, plus 9 bytes @`0xFD000` (BTIF header). Everything else — `0xC9500–0xFCFF`,
+`0xFE000–0xFFFF` (EXIF, key_mac) — is all-`FF` (erased).
+
+### §40.11.1 `sdfile` — the JLFS tree (flash `0x5000` + tail) — READ-ONLY
+
+```
+mnt/sdfile/                       ← sdfile driver, JLFS container (app_dir_head @0x5000)
+├── app/
+│   ├── exif                      ← flash 0xFE000 — ERASED in dump (all FF)
+│   │                                read: FUN_01e4faa8 (§40.9); write: none (reflash-only)
+│   └── btif                      ← flash 0xFD000 — 9 live bytes: 81 66 60 00 92 85 e8 59 ff
+│                                    (header/seq only; record area @+0x200 all-FF ⇒ ZERO
+│                                    BTIF records on this unit)
+│                                    read: cfg_tool loader 2nd open (§40.9 refinement —
+│                                    the "secondary source" IS this file, base +0x200);
+│                                    write: none at runtime
+└── res/
+    ├── cfg_tool.bin   969 B      ← §40.4: BT name 'TD-H3 Plus' + PIN '1234', BLE name
+    │                                  'H3_Plus_BLE', jl_soundbox banks, EQ floats
+    │                                read: FUN_01e2c64e once at boot → RAM cursors
+    │                                  0x10190/0x10194/0x10198; ID-dispatched 0x200–0x2BC
+    │                                write: NONE (verified §40.9)
+    ├── eq_cfg_hw.bin  1149 B     ← §40.5: EQ biquads + high-entropy tail @+0x370
+    │                                read: FUN_01e487d2/0x01E48812/0x01E48948 (boot
+    │                                  initcall table @0x01E00B60)
+    │                                write: NONE
+    ├── config.dat     336 B      ← §40.3: JCRT TLV, 6 keys (ver_info…power_io, fixed
+    │                                  factory link_key); NO paging policy
+    │                                read: FUN_01e4fae6 key lookup; write: NONE
+    └── md5.bin         32 B      ← §40.6: MD5 of app_dec[0x100:0xC2C60]
+                                     read: FUN_01e4fc8a integrity; write: NONE
+```
+
+### §40.11.2 NOR volumes `fat_nor` / `res_nor` / `nor_ui` — EMPTY (unformatted)
+
+All three mount via NOR block devices (`nor_fs` ops tables §40.10) into
+`storage/<name>/C/`. In this dump **no FAT BPB, no `nor_sdfile` header, no file entries
+exist anywhere in `0xC9500–0xFCFF`** — the span is all-`FF`. They are format-on-first-use
+volumes (embedded FAT32 BPB template @`~0x9AD40` §40.10) and this unit never used them.
+Expected-but-absent content: the 393 tone files (`storage/res_nor/C/tone/…` §40.7 — openers
+`FUN_01e3fe50`/`FUN_01e3fed2`/`FUN_01e521de`/`FUN_01e5e4e2` get open-fail → prompts silent,
+**closing the §40.7 open question: the tone audio is genuinely not on this radio**); UI
+assets on `nor_ui`. Reads: the tone openers + `nor_ui` consumers; writes: format path +
+vendor tooling only.
+
+### §40.11.3 The VM record bank @`0xC9000` — the ONLY live runtime FS — format CRACKED
+
+Record framing (brute-forced to a **perfect 54-record tiling** of bank A, validated
+against the §9A.8/§12A.7 anchors):
+
+```
+bank header (14 B): 55 AA AA 55 | seq u32 (here 0x006068FB) | aa 7c bb 55 | 1f ef
+record:  [u8 crcLo][u8 idx][u16 (len<<4)][data × len]     (len = code>>4, ≤ 0x3F? — max seen 35)
+crcLo  = LOW BYTE of CRC-16-CCITT (poly 0x1021, init 0x0000, non-reflected) over DATA ONLY
+delete = append same idx with all-FF payload (crc of 32×FF = 0xB4 — the old "tombstone")
+lookup = append-only log, LAST live record per idx wins; two banks @0xC9000/@0xC9490
+```
+
+(The SDK's `vm.h` `struct vm_table {u16 index; u16 value_byte; …}` is the RAM-side API
+shape; the on-flash framing above is what the precompiled `cpu.a` VM lib actually writes.
+Bank B @`0xC9490` is all-`FF` in this dump — the old §12A.7 'TD-H3-Plus-9320' bank was a
+different unit/era read.)
+
+Full bank A listing (idx names from `fw-AC630N_BT_SDK/include_lib/system/syscfg_id.h`;
+H3+ deviations marked):
+
+| off | idx | name | len | content |
+|---|---|---|---|---|
+| `0xC900E` | 101 | `CFG_BT_NAME` | 32 | `TD-H3-Plus-3511` |
+| `0xC9032` | 103 | (H3+: **BLE name**) | 32 | `TD-H3-Plus-3511-ble` |
+| `0xC9056` | 104 | `CFG_SYS_VOL`? | 6 | `c9 e8 0f 7a 92 d1` |
+| `0xC9060` | 92 | `CFG_AAP_MODE_INFO` | 8 | `7c fc 00 f8 7b fc 00 00` |
+| `0xC906C` | 90 | `CFG_POR_FLAG` | 1 | `a5` |
+| `0xC9071` | 86 | `CFG_USER_RESET_SOURCE` | 1 | `1e` |
+| `0xC9076` | 93 | `CFG_DAC_TRIM_INFO` | 29 | `00 00 fb ff fb ff 78 00 78 00 fc ff 0d 00 18 00 7b 00 fb ff 03 02 02 02 02 00 01 04 df` |
+| `0xC9097` | **71** | **PAIRING** (AC630N: TWS_INFO) | 32 | ctr `8235 0100` mask `ffff` sub `0003` **addr `bc:54:4a:c8:17:90`** key `07c3b3b0e8cab913c52e06e54cef5e41` |
+| `0xC90BB` | **71** | PAIRING rewrite | 32 | ctr `370a 0200`1… same addr+key |
+| `0xC90DF` | **71** | PAIRING rewrite | 32 | ctr `549e 0300`… same addr+key |
+| `0xC9103`…`0xC922D` | 17 | user-range | 35 | `07 13 <id>` + 32×00, ids `01,23,24,25,26,25,24,d3` (append log) |
+| ×13 | 86 | RESET_SOURCE log | 1 | `07 0a 1e 0c 12 1e … 0b 04 01 0c 19 09 00 05 02 1e 07 18 12 1e 02 1e 14` = **one byte per reboot** |
+| `0xC927C` | **81** | **PAIRING** (AC630N: DAC_TEST_VOLT — H3+ reuse) | 32 | ctr `9538 0100` mask `ffff` sub `0030` **addr `34:73:e2:4b:5c:74`** key `6c5f6a536df2557ebcfc6f1055202a8e` |
+| `0xC92AA` | 81 | deleted (32×FF) | 32 | — |
+| `0xC92D3` | **81** | PAIRING rewrite | 32 | ctr `c280 0100` addr `34:73:e2:4b:5c:74` key `5c62b5cfef4cd1ebc8b2e349a2808709` |
+| `0xC92FC`–`0xC9440` | 72–81 | deleted slots | 32 | 32×FF each (idx 72,73,74,75,76,77,78,79,80,81) |
+
+Reading of the table:
+
+- **Two paired devices live in the VM**: `bc:54:4a:c8:17:90` (idx 71, one key, rewritten
+  3× — append-only counters) and `34:73:e2:4b:5c:74` (idx 81, key rewritten once after a
+  delete). §9A.8's "mystery constant" `34:73:e2:4b:5c:74` appears as the idx-81 record's
+  ADDR field — consistent with it being **this radio's own BD_ADDR** stamped into its
+  pairing records (identity binding), not a remote. OUI of `bc:54:4a` = the remote device.
+  The TID-PTT (`6F:E5:E7:FB:12:4F`) is NOT in this dump (predates the PTT pairing era of
+  the project).
+- idx 86 = per-reboot reset-source log (~20 reboots recorded); idx 17 = app user-range
+  event log (`07 13 <id>` events).
+- **VM write sites**: precompiled `cpu.a` VM lib (`vm_write`/`vm_delete` per SDK
+  `vm.h`); callers = btstack pairing storage (link keys), syscfg config writes, reboot
+  logging. **Read sites**: `vm_read` via the same lib at boot (names, trims) and on
+  pairing lookups. No app code reads the bank directly — §40.9's file readers are
+  separate.
+- **Two-device relevance**: the VM holds ONLY keys/ids — no device-type or policy field
+  (confirms §9A.8 on a fresh decode). The eviction/bind wall is NOT data here either.
+
+### §40.11.4 Loose tail structures (not filesystems)
+
+| Region | Bytes | What | Read/Write |
+|---|---|---|---|
+| `0xC8FE0` | 32 | device-specific block (§12A.6): `04 00 … 03 01 1e ff 0d 21 1c 00 67 de 8f 43 4a be 78 00` — survives sector reflashes; candidates MAC/serial/cal | read at boot (bootloader/app); written by factory flow |
+| `0xFD000` | 9 | BTIF header `81 66 60 00 92 85 e8 59 ff` (§40.11.1) | via `mnt/sdfile/app/btif` |
+| `0xFE000` | — | EXIF — erased | via `mnt/sdfile/app/exif` |
+| `0xFF000` | — | key_mac — erased | loader-side |
+
+### §40.11.5 Devices with no content in the dump
+
+`rec_fs` (recordings), `udisk0`/`udisk0_rec` (USB-MSC client), `sd0`/`sd1` (no HW),
+`fm_inside` (FM res), `res.bin`, `/sin.wav` — driver strings + ops tables exist (§40.10),
+no mounted content: these need external media and are empty/absent by definition.
