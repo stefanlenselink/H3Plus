@@ -333,3 +333,133 @@ Reading of the table:
 `rec_fs` (recordings), `udisk0`/`udisk0_rec` (USB-MSC client), `sd0`/`sd1` (no HW),
 `fm_inside` (FM res), `res.bin`, `/sin.wav` — driver strings + ops tables exist (§40.10),
 no mounted content: these need external media and are empty/absent by definition.
+
+## §40.12 THE VOICE PROMPTS — where "Bluetooth connected" actually comes from (2026-11-24)
+
+**Question (user, verbatim):** *"when I connect a bluetooth device I hear the words
+"Bluetooth connected" and when I disconnect … "Bluetooth disconnected" … where are those
+samples coming from? Are they in memory? Compiled inline? … changing the langue in the menu
+did not change the words / samples. Also … "Menu" and "Confirmed" and … "Channel mode" and
+"Frequency Mode""*
+
+**VERDICT: they are audio FILES, not inline data.** Each prompt is a file opened by path
+`storage/res_nor/C/tone/<name>.*` from a per-event pointer table in the app, and the
+`res_nor` volume is backed by a **second (external) SPI NOR flash mapped at flash
+`0x100000`…`0x300000`** — a region the 1 MiB chip dump and the bootloader's FLASH_CRC
+(both masked to the internal chip) have NEVER covered. That is why every earlier scan of
+`work/app_dec.bin` and of both full-chip dumps found no audio.
+
+### §40.12.1 The per-event voice pointer table @`0x01E9F1C4`..`0x01E9F294`
+
+Contiguous u32 LE array in `work/app_dec.bin` (file `0x9F1C4`..`0x9F294`); every entry is a
+pointer to a path string `storage/res_nor/C/tone/<name>.*` in the pool at file
+`0x86B44`..`0x87BA0` (133 strings). Index is relative to `0x01E9F244` (= index 0):
+
+| idx | prompt | idx | prompt | idx | prompt |
+|---|---|---|---|---|---|
+| −33..−14 | `zero` `one` … `nine` | 6 | `low_voltage` | 14 | `bt_mode` |
+| −12..−5 | `twenty` `thirty` … `ninety` | **7** | **`channel_m`** | **15** | **`bt_conn`** |
+| −4 | `hundred` | **8** | **`frequency_m`** | **16** | **`bt_dconn`** |
+| −2 | `en_and` | **9** | **`confirm`** | 17 | `fm_mode` |
+| 0 | `d_sound` | 10 | `cancel` | 18 | `call_rem` |
+| 1 | `tx_timeout` | 11 | `on` | 19 | `d_sound2` |
+| 2 | `welcome` | 12 | `off` | 20 | `rx_sound` |
+| 3 | `lock` | **13** | **`menu`** | | |
+| 4 | `unlock` | | | | |
+| 5 | `save_mode` | | | | |
+
+All six prompts the user asked about are in this table (7, 8, 9, 13, 15, 16). The table base
+has **zero absolute references** in the image — it is reached by computed addressing.
+
+### §40.12.2 How a prompt is played (`FUN_01e5e4e2`, the tone runner)
+
+Sequence object: `obj+0x10` → list, `list+0x14` → u32 array, `obj+9` index, `obj+0xb` enable,
+`obj+0xc` repeat. Entry class = top 2 bits: `0x80000000` loop/segment marker, `0x40000000`
+repeat-count (low 16 bits), **`&0xc0000000 == 0` → FILE PATH POINTER**, `≥0xc0000000` →
+built-in beep via callback `FUN_01e807b4` (id → descriptor tables `0x01E9C424`/`0x01E9C434`/
+`0x01E9C9FC`/`0x01E9CA1C`/`0x01E9CA3C`/`0x01E9CD8C` — sine/beep only, no speech).
+File branch: `FUN_01e24d26(path, "r")` = fopen (mode string `"r"` @`0x01E9B437`), reads the
+first 16 bytes, `strncmp(name,"sin",3)` sniff (`"sin"` @`0x01E9B4C7`) → `FUN_01e3fed2`
+(header + extension table `PTR_FUN_01e9ce34`) else `FUN_01e3fe50` (plain decoder, 16 kHz);
+built-ins use `FUN_01e3fdb8`. **All three return 0 (silence) if fopen fails** — so audible
+voice proves the volume and files exist at runtime. Supported extensions list
+`wtg`/`mty`/`aac`/`mp3`/`wma` @file `0x86A1C`. Sequence builder example: `FUN_01e7ed80`
+(assembles from table @`0x01E9F104` + appends `0x4000ffff`,`0xc0000005`,`0x80000000`,0).
+
+### §40.12.3 Mount table @`0x01E93418` (stride 0x14: name, name, mountpoint, prefix, fs-type)
+
+| volume | mount point | prefix | fs type |
+|---|---|---|---|
+| `sdfile` | `mnt/sdfile` | `mnt/sdfile/res/` | (sdfile/JLFS — §40.2, flash `0xC2C60`) |
+| `fat_nor` | `storage/fat_nor` | `storage/fat_nor/C/` | `fat` |
+| **`res_nor`** | **`storage/res_nor`** | **`storage/res_nor/C/`** | **`nor_sdfile`** |
+| `nor_ui` | `storage/nor_ui` | `storage/nor_ui/C/` | `nor_sdfile` |
+
+Mounted by `FUN_01e4a978` → `FUN_01e4a8ba(name)` → `FUN_01e24e48(mountpoint, type, 3)` →
+`FUN_01e2c3ea(type)` device lookup. `nor_sdfile` driver: init `FUN_01e260f2`, read primitive
+`FUN_01e26116` → `FUN_01e2c472(handle,buf,addr,len)`, dir walk `FUN_01e26146` (0x20-byte
+entries, head crc16 `FUN_01e4cbea(entry|2,0x1e)`, dir base RAM `_DAT_000412c0`), open
+`FUN_01e261ac` (root name check vs `"C"` @`0x01E932EE`), file read `FUN_01e262c0`.
+
+### §40.12.4 ★ The physical base — device table @`0x01E24734` (stride 0xc) ★
+
+| entry | name | device struct | region descriptor | region | ioctl class |
+|---|---|---|---|---|---|
+| `0x24734` | `"fat_nor"` | `0x01E93484` | `0x01E935EC` | **+0x10 `0x00000000` / +0x14 `0x00100000`** = internal 1 MiB | `0x200` |
+| `0x24740` | `"res_nor"` | `0x01E934A4` | `0x01E93604` | **+0x10 `0x00100000` / +0x14 `0x00300000`** = 2 MiB ABOVE 1 MiB | `1` |
+
+Both descriptors carry `{2, 0x17, 0, ptr→"A"}` (port/CS group letter `"A"` @`0x01E9361C`).
+res_nor read `FUN_01e4caf0` = `FUN_01e4c386(*(int*)(*(int*)(ctl+4) + 4) + off, 0)` →
+**physical = instance base (`0x100000`, loaded from the descriptor) + file offset**; write
+`FUN_01e4cb0a` = `FUN_01e4c696(base+off, 0)`; ioctl passes class `1` where the internal chip
+passes `0x200` — i.e. a DIFFERENT flash device, not a partition of the internal one.
+**Status: statically derived; hardware-confirmed only indirectly** (voice is audible while the
+entire internal 1 MiB is CRC-proven free of any tone data).
+
+### §40.12.5 Corroboration from the live radio and the SDK
+
+* Live FLASH_CRC oracle (HID mode, read-only): internal chip holds ONLY VM bank A
+  (`0xC9000`, live churn) + 4 KiB content at `0xCA000` (chip `C179` vs dump `E03E`=all-FF) +
+  erased `0xCB000`–`0xFDFFF`. Reads at `0x100000`+ **wrap mod 1 MiB** — the bootloader is
+  masked to the internal chip, so the wrap does NOT disprove the external flash; it only
+  proves the bootloader cannot see it. `crc16(4 KiB FF) = E03E`.
+* Uppercase `nor_sdfile` dir-name scan (`BT_CONN`, `BT_DCONN`, `INDEX.IDX`, `CHANNEL_M`,
+  `CONFIRM`, `FREQ`) over `Dumps/dump_internal.bin`, `Dumps/dump_pre_ch30.bin`,
+  `work/app_dec.bin`: **zero hits** (dir entries store names UPPERCASE —
+  `sdfile_str_to_upper`). Consistent: the res dir is not in the internal chip.
+* SDK (`fw-AC630N_BT_SDK`) packing: `cpu/bd29/tools/download.bat` →
+  `isd_download.exe … -app app.bin cfg_tool.bin **-res tone.cfg**`; `tone.cfg` = packed tone
+  container (`index.idx`, `bt_conn.wtg`, `bt_dconn.wtg`, `power_on/off.wtg` + zh labels);
+  `conf/source/tone/tone.lua` maps zh/en names → fixed base filenames (`connected`→`bt_conn`)
+  and offers formats `wtg`/`msbc`/`sbc`/`sin`/`mty`; sample `extra_tones/bt_conn.wtg` = 960 B
+  with a repeating 10-byte record framing (not MP3/WAV/zlib) — explains why audio-magic scans
+  could not have found these even if present.
+* SDK DWARF (`include_lib/liba/bd29/system.a`, `sdfile_new.c`) gives the exact driver
+  structs: `sdfile_file_head {u16 head_crc; u16 data_crc; u32 addr; u32 len; u8 attr,res;
+  u16 index; char name[16]}`, `nor_sdfile_hdl {addr_offset; read; write;}`,
+  `_sdfile_handle {sfc_base_addr; app_addr; app_part_addr; res_part_addr; dir_addr;
+  vm_end_addr}`, symbols `__initcall_sdfile_init`, `tone_saddr`,
+  `sdfile_flash_addr2cpu_addr`/`sdfile_cpu_addr2flash_addr`.
+
+### §40.12.6 Answers to the sub-questions
+
+* **"Are they in memory / compiled inline?"** No. Not in the app plaintext, not in the VM,
+  not in either full-chip dump. They are files in a filesystem (`nor_sdfile`) on the external
+  NOR at `0x100000`+; the app only carries the *paths* (§40.12.1) and the decoder code.
+* **"Why doesn't the language menu change them?"** The menu localises UI text only. The tone
+  filenames are FIXED English base names baked into the pointer table (`bt_conn`, `menu`,
+  `confirm`, `channel_m`, `frequency_m`), and the res bank holds a single set — the SDK's
+  `addToneNameMapLang("en", …)` mechanism renames labels, not files, and TIDRADIO shipped one
+  bank. (Static inference from the table + SDK; the bank contents themselves unread.)
+* **Per-event mapping** is exactly the table in §40.12.1: connect→idx 15 `bt_conn`,
+  disconnect→idx 16 `bt_dconn`, menu open→idx 13 `menu`, confirm→idx 9 `confirm`,
+  channel-mode→idx 7 `channel_m`, frequency-mode→idx 8 `frequency_m`.
+* **Corollary for §40.11.2/§40.11.5:** those sections' "NOR volumes empty / `res.bin` no
+  content" statements remain true **for the internal 1 MiB chip**; `res_nor` is NOT empty —
+  its content was simply never addressable from the bootloader. The "128 Mb external
+  storage" vendor claim (findings/18) is now explained: the app addresses `[0x100000,
+  0x300000)` through the class-1 flash device.
+* **To get the bytes** (future work, UNTESTED): the class-1 device is reachable only from the
+  app. Candidates: an MSC/`udisk` or AT/RCSP-side file dump of `storage/res_nor/C/tone/*`, or
+  a code-cave that calls `FUN_01e26116`/`FUN_01e4c386` and ships bytes out over SPP. The
+  uboot HID/MSC path cannot read it (masked to 1 MiB).
