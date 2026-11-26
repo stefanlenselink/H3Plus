@@ -521,3 +521,74 @@ cross-validates the cipher on a second family, BR28 vs our BR23).
     strengthens the §38.22 capture lead: an official-app update session reveals the
     vendor write handshake; and tone files are plain MP3 (24 kHz mono 24 kbps
     MPEG-2 L3, strip XING/ID3 to save bytes, `FF` padding tolerated).
+
+## §38.27 Teardown photos: PCB front + back, the 4 pads, firmware-readout routes (2026-11-26)
+
+Two photos of the opened puck (the image files themselves are not yet in the repo —
+add them under `findings/img/` and link here).
+
+**Back side (button side).** Silkscreen **`LT-TX-V1.3  24/12/27`** + QR code (board
+name/rev/date: Dec 2024). Visible: the PTT tact switch (centre), the USB-C shell edge
+(left), and a **boxed row of 4 round pads** ("test strip") beside the USB-C
+receptacle. No component on this side; the strip is plain bare pads.
+
+**Front side (component side).** USB-C receptacle (left), **~QFN32/40 SoC** (centre;
+marking not legible — still needed, §38.8), 1 crystal (top, ~24 MHz, SMD 3225-style),
+a few passives, **meander PCB antenna** (right edge), **`BAT +/−` pads** with a
+red/black Li-pol lead (bottom), one unpopulated/via hole top-right.
+
+### The 4 pads — what they most likely are
+
+Not labelled; function is **INFERRED, not measured**. In order of likelihood on a
+JieLi board of this layout:
+
+1. **Programming/test strip = VBAT (or 5V) / DP / DM / GND** — exactly the JieLi
+   reference-design pads noted in §38.26-6, used by the factory fixture to flash the
+   chip before the case is closed. They sit next to the USB-C because they are
+   (probably) just a parallel tap of the USB-C power/data lines.
+2. UART strip (3V3/TX/RX/GND) — JieLi debug UART is usually PA/PB pins and normally
+   is NOT on a 4-pad strip; less likely.
+3. Charge/battery test pads — unlikely, `BAT` is already marked on the front.
+
+**Confirm in 5 minutes (multimeter, battery unplugged, USB unplugged):**
+- continuity of each pad to USB-C **GND** (shell/pin A1) → finds GND;
+- continuity to USB-C **VBUS** (A4/A9) → 5V/VBAT pad;
+- continuity to USB-C **D+ (A6/B6)** and **D− (A7/B7)** → DP/DM pads;
+- if no pad ties to USB-C: beep each pad to the SoC pins / measure with PTT powered
+  (3.3 V = VDD/UART TX idle high; a pad that is high-Z and only toggles at boot = UART TX).
+- Don't power any pad from 5 V unless it is proven to be the VBUS-side net.
+
+### How they can be used
+
+- If DP/DM/GND/VBAT: this is the **same data path as the USB-C port**, so it gives NO
+  new access by itself (§38.6: the firmware never enumerates). Its value is that you
+  can wire **DP/DM straight to the §39.13 USB_KEY dongle** (ESP32 + 4.7 kΩ pull-ups,
+  SWITCHLESS mode, §38.26) without soldering on the USB-C connector, and tap **GND**
+  and **VBAT** for the dongle.
+- If UART: sniff boot log at 115200 8N1 first (RX only); the JieLi bootloader prints
+  chip family/version (`<FAMILY>UBOOT`) — free identification.
+
+### Getting the firmware off — routes, best first
+
+1. **USB_KEY into ROM UBOOT (Route A, §38.26/§39.13).** Stream key `0x16EF` MSB-first
+   on D+/D− *across power-on* (battery connected → toggle by disconnecting BAT, or
+   PB1-low 8 s if PB1 is exposed), wait for ACK, keep a real USB host on the same
+   lines for SOF calibration, then use `jl-uboot-tool`/our `tools/jl_*` to dump flash
+   and read the chip key + flash ID. Decrypt with `tools/jl_sfcenc.py`. Pads (1) make
+   this solderable in minutes. Take a pristine dump FIRST (recovery calculus, §38.26-4).
+2. **Desolder/clip the SPI NOR flash** — JieLi parts usually run from an external
+   (or in-package) SPI flash. Photo shows no separate 8-pin flash near the SoC, so the
+   flash is probably **in-package** (JL7018F8-style SiP) → this route is probably
+   unavailable; re-check with a sharper SoC/flash photo.
+3. **Vendor update path** (RCSP OTA, §38.9/§38.25): write-only, cannot read out.
+4. No JTAG/SWD readout is expected on JieLi parts; none is exposed on these 4 pads.
+
+**Next steps:** (a) macro photo of the SoC marking; (b) beep-out the 4 pads and fill in
+the table below; (c) try Route A on the pads.
+
+| Pad (L→R / T→B as in photo) | Beeps to | Voltage idle | Role |
+|---|---|---|---|
+| 1 | | | |
+| 2 | | | |
+| 3 | | | |
+| 4 | | | |
